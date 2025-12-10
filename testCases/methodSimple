@@ -1,0 +1,5 @@
+method hello(x, y : int) : bool
+var result, temp: int;
+begin
+    result := (x + 1) * 2;
+end;
