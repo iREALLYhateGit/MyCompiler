@@ -1,118 +1,45 @@
 #include <stdio.h>
-#include <antlr3.h>
-#include "GrammarLexer.h"
-#include "GrammarParser.h"
+#include "parser_module.h"
 
-// Функция для рекурсивного вывода дерева
-void printTree(pANTLR3_BASE_TREE tree, int indent) {
-    if (tree == NULL) return;
-
-    // Отступ для визуализации уровня вложенности
-    for (int i = 0; i < indent; i++) {
-        printf("  ");
-    }
-
-    // Получаем текст узла
-    pANTLR3_STRING text = tree->getText(tree);
-    printf("%s\n", text->chars);
-
-    // Рекурсивно обрабатываем дочерние узлы
-    ANTLR3_UINT32 childCount = tree->getChildCount(tree);
-    for (ANTLR3_UINT32 i = 0; i < childCount; i++) {
-        pANTLR3_BASE_TREE child = (pANTLR3_BASE_TREE)tree->getChild(tree, i);
-        printTree(child, indent + 1);
-    }
-}
-
-// Функция для вывода дерева в DOT формат (для Graphviz)
-void treeToDoT(pANTLR3_BASE_TREE tree, FILE* out, int* nodeId) {
-    if (tree == NULL) return;
-
-    int currentId = (*nodeId)++;
-    pANTLR3_STRING text = tree->getText(tree);
-
-    // Экранируем специальные символы
-    fprintf(out, "  node%d [label=\"%s\"];\n", currentId, text->chars);
-
-    ANTLR3_UINT32 childCount = tree->getChildCount(tree);
-    for (ANTLR3_UINT32 i = 0; i < childCount; i++) {
-        int childId = *nodeId;
-        pANTLR3_BASE_TREE child = (pANTLR3_BASE_TREE)tree->getChild(tree, i);
-
-        treeToDoT(child, out, nodeId);
-        fprintf(out, "  node%d -> node%d;\n", currentId, childId);
-    }
-}
-
-
-
-int main(int argc, char* argv[]) {
-    // Проверка аргументов командной строки
-    if (argc < 2) {
-        fprintf(stderr, "Использование: %s <входной_файл>\n", argv[0]);
+int main(int argc, char* argv[])
+{
+    if (argc < 3) {
+        fprintf(stderr, "Usage: %s <input_file> <output_file>\n", argv[0]);
         return 1;
     }
 
-    // Открываем входной файл
-    pANTLR3_INPUT_STREAM input = antlr3FileStreamNew(
-        (pANTLR3_UINT8)argv[1],
-        ANTLR3_ENC_8BIT
-    );
+    ParseResult result = parseFile(argv[1]);
 
-    if (input == NULL) {
-        fprintf(stderr, "Exception while opening file: %s\n", argv[1]);
+    // Ошибки
+    for (int i = 0; i < result.errorCount; i++)
+        fprintf(stderr, "Error: %s\n", result.errors[i]);
+
+    if (!result.tree) {
+        fprintf(stderr, "Tree creation failed.\n");
+        freeParseResult(&result);
         return 1;
     }
 
-    // Создаем лексер
-    pGrammarLexer lexer = GrammarLexerNew(input);
-
-    // Создаем поток токенов
-    pANTLR3_COMMON_TOKEN_STREAM tokens = antlr3CommonTokenStreamSourceNew(
-        ANTLR3_SIZE_HINT,
-        TOKENSOURCE(lexer)
-    );
-
-    // Создаем парсер
-    pGrammarParser parser = GrammarParserNew(tokens);
-
-    // Парсим входной файл (source - стартовое правило из грамматики)
-    GrammarParser_source_return result = parser->source(parser);
-
-    // Получаем дерево разбора
-    pANTLR3_BASE_TREE tree = result.tree;
-
-    // Проверяем на ошибки
-    if (parser->pParser->rec->state->errorCount > 0) {
-        fprintf(stderr, "Parser faced %d exceptions\n",
-                parser->pParser->rec->state->errorCount);
-        return 1;
-    }
-
-    // Выводим дерево в консоль
     printf("Syntactic tree:\n");
-    printTree(tree, 0);
+    printTree(result.tree, 0);
 
-    // Сохраняем в DOT формат для визуализации
-    FILE* dotFile = fopen("tree.dot", "w");
-    if (dotFile != NULL) {
-        fprintf(dotFile, "digraph AST {\n");
-        fprintf(dotFile, "  node [shape=box];\n");
-
-        int nodeId = 0;
-        treeToDoT(tree, dotFile, &nodeId);
-
-        fprintf(dotFile, "}\n");
-        fclose(dotFile);
-        printf("\nTree is stored into tree.dot\n");
-        printf("To visualise execute: dot -Tpng tree.dot -o tree.png\n");
+    FILE* out = fopen(argv[2], "w");
+    if (!out) {
+        fprintf(stderr, "Cannot open output file\n");
+        freeParseResult(&result);
+        return 1;
     }
 
-    // Освобождаем ресурсы
-    parser->free(parser);
-    tokens->free(tokens);
-    lexer->free(lexer);
-    input->close(input);
+    fprintf(out, "digraph AST {\n  node [shape=box];\n");
+    int nodeId = 0;
+    treeToDot(result.tree, out, &nodeId);
+    fprintf(out, "}\n");
+    fclose(out);
+
+    freeParseResult(&result);
+
+    printf("\nTree is stored into tree.dot\n");
+    printf("To visualise execute: dot -Tpng tree.dot -o tree.png\n");
 
     return 0;
 }

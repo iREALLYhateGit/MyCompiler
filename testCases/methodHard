@@ -1,0 +1,11 @@
+method hello(x, y : int)
+var result, temp: int;
+b, c;
+begin
+    result := (x + 1) * 2 + 3 < 9 + 7;
+    xui := 2;
+    call_method(23);
+    2 + 5;
+    if 23 then better_call_soul(45);
+    2 + 9;
+end;

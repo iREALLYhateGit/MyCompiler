@@ -5,7 +5,6 @@ set(CMAKE_C_STANDARD 11)
 
 include_directories(${CMAKE_SOURCE_DIR}/antlr3c/include)
 
-
 file(GLOB ANTLR3C_SOURCES "antlr3c/src/*.c")
 
 add_executable(MyCompiler
@@ -14,6 +13,7 @@ add_executable(MyCompiler
         GrammarParser.c
         parser_module.c
         ${ANTLR3C_SOURCES}
+        parser_module.c
 )
 
 target_link_libraries(MyCompiler ws2_32)
