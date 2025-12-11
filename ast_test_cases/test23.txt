@@ -1,0 +1,8 @@
+method m()
+begin
+    while x < 10 do
+    begin
+        x := x + 1;
+        y := y + 2;
+    end;
+end;

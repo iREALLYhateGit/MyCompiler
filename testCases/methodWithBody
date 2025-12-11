@@ -1,4 +1,0 @@
-method hello(x, y : int) : bool
-var result, temp: int;
-begin
-end;

@@ -1,0 +1,4 @@
+method m()
+begin
+    arr[0];
+end;

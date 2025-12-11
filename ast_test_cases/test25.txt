@@ -1,0 +1,9 @@
+method m()
+begin
+    repeat
+    begin
+        x := x + 1;
+        y := y + 2;
+    end;
+    until x > 10;
+end;

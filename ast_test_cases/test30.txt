@@ -1,0 +1,10 @@
+method m()
+begin
+    a := true;
+    b := false;
+    c := "hello";
+    d := 'x';
+    e := 123;
+    f := 0xFF;
+    g := 0b10101;
+end;
