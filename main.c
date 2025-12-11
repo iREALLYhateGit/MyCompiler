@@ -36,10 +36,19 @@ int main(int argc, char* argv[])
     fprintf(dotFile, "}\n");
     fclose(dotFile);
 
+    ControlFlowGraph* cfg = buildCFG(result.tree);
+
+    for (int i = 0; i < cfg->node_count; i++) {
+        printf("%d\n", cfg->nodes[i]->id);
+        printf("%s\n", cfg->nodes[i]->label);
+        for (int k = 0; k < cfg->nodes[i]->stmt_count; k++) {
+            printf("  %s\n", cfg->nodes[i]->statements[k]->getText(cfg->nodes[i]->statements[k])->chars);
+        }
+    }
+
     freeParseResult(&result);
 
     printf("\nTree is stored into tree.dot\n");
     printf("To visualise execute: dot -Tpng tree.dot -o tree.png\n");
-
     return 0;
 }
