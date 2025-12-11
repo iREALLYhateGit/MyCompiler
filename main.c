@@ -8,7 +8,7 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    ParseResult result = parseFile(argv[1]);
+    const ParseResult result = parseFile(argv[1]);
 
     // Ошибки
     for (int i = 0; i < result.errorCount; i++)
@@ -23,18 +23,18 @@ int main(int argc, char* argv[])
     printf("Syntactic tree:\n");
     printTree(result.tree, 0);
 
-    FILE* out = fopen(argv[2], "w");
-    if (!out) {
+    const FILE* dotFile = fopen(argv[2], "w");
+    if (!dotFile) {
         fprintf(stderr, "Cannot open output file\n");
         freeParseResult(&result);
         return 1;
     }
 
-    fprintf(out, "digraph AST {\n  node [shape=box];\n");
+    fprintf(dotFile, "digraph AST {\n  node [shape=box];\n");
     int nodeId = 0;
-    treeToDot(result.tree, out, &nodeId);
-    fprintf(out, "}\n");
-    fclose(out);
+    treeToDot(result.tree, dotFile, &nodeId);
+    fprintf(dotFile, "}\n");
+    fclose(dotFile);
 
     freeParseResult(&result);
 
