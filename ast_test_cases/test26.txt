@@ -1,0 +1,6 @@
+method m()
+begin
+    repeat
+        if x == 0 then y := 1; else y := 2;
+    until y != 0;
+end;

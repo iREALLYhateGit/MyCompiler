@@ -1,0 +1,4 @@
+method m()
+begin
+    1 + 2;
+end;

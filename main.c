@@ -1,5 +1,7 @@
 #include <stdio.h>
+
 #include "parser_module.h"
+#include "cfg_builder_module.h"
 
 int main(int argc, char* argv[])
 {
@@ -8,7 +10,7 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    const ParseResult result = parseFile(argv[1]);
+    ParseResult result = parseFile(argv[1]);
 
     // Ошибки
     for (int i = 0; i < result.errorCount; i++)
@@ -23,7 +25,7 @@ int main(int argc, char* argv[])
     printf("Syntactic tree:\n");
     printTree(result.tree, 0);
 
-    const FILE* dotFile = fopen(argv[2], "w");
+    FILE* dotFile = fopen(argv[2], "w");
     if (!dotFile) {
         fprintf(stderr, "Cannot open output file\n");
         freeParseResult(&result);
@@ -42,9 +44,19 @@ int main(int argc, char* argv[])
         printf("%d\n", cfg->nodes[i]->id);
         printf("%s\n", cfg->nodes[i]->label);
         for (int k = 0; k < cfg->nodes[i]->stmt_count; k++) {
-            printf("  %s\n", cfg->nodes[i]->statements[k]->getText(cfg->nodes[i]->statements[k])->chars);
+            printTree(cfg->nodes[i]->statements[k], 0);
         }
     }
+
+    FILE* cfgDot = fopen("cfg.dot", "w");
+    if (!cfgDot) {
+        fprintf(stderr, "Cannot open cfg.dot\n");
+        return 1;
+    }
+
+    cfgToDot(cfg, cfgDot);
+    fclose(cfgDot);
+
 
     freeParseResult(&result);
 

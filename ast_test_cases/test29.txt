@@ -1,0 +1,7 @@
+method m()
+begin
+    while true do
+    begin
+        break;
+    end;
+end;

@@ -1,0 +1,3 @@
+method a();
+method b(x:int) : int;
+method c(x, y, z : long);

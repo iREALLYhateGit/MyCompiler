@@ -1,0 +1,5 @@
+method m()
+var a, b : int;
+    c : bool;
+begin
+end;

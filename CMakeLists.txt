@@ -13,8 +13,7 @@ add_executable(MyCompiler
         GrammarParser.c
         parser_module.c
         ${ANTLR3C_SOURCES}
-        parser_module.c
-)
+        cfg_builder_module.c)
 
 target_link_libraries(MyCompiler ws2_32)
 

@@ -1,0 +1,4 @@
+method m()
+begin
+    f(1, 2 + 3, x);
+end;

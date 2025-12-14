@@ -51,6 +51,7 @@ tokens {
     REPEAT;
     REPEATABLE_PART;
     BREAK;
+    UNTIL;
 }
 
 /* ===========================
@@ -173,8 +174,8 @@ whileStatement
     ;
 
 repeatStatement
-    : K_REPEAT statement condition=(K_WHILE | K_UNTIL) expression ';'
-      -> ^(REPEAT ^(REPEATABLE_PART statement) ^($condition expression))
+    : K_REPEAT statement (K_WHILE | K_UNTIL) expression ';'
+      -> ^(REPEAT ^(REPEATABLE_PART statement) ^(UNTIL expression))
     ;
 
 breakStatement

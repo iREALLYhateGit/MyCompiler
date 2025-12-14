@@ -1,0 +1,4 @@
+method m()
+begin
+    x := arr[i + 1] * 2;
+end;
