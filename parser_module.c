@@ -108,19 +108,28 @@ void printTree(pANTLR3_BASE_TREE tree, int indent) {
     }
 }
 
-void treeToDot(pANTLR3_BASE_TREE tree, FILE* out, int* nodeId) {
-    if (!tree) return;
 
+void treeNodeToDot(pANTLR3_BASE_TREE tree, FILE* dotFile, int* nodeId)
+{
     int currentId = (*nodeId)++;
     pANTLR3_STRING text = tree->getText(tree);
-    fprintf(out, "  node%d [label=\"%s\"];\n", currentId, text->chars);
+    fprintf(dotFile, "  node%d [label=\"%s\"];\n", currentId, text->chars);
 
     ANTLR3_UINT32 childCount = tree->getChildCount(tree);
     for (ANTLR3_UINT32 i = 0; i < childCount; i++) {
         int childId = *nodeId;
-        pANTLR3_BASE_TREE child = (pANTLR3_BASE_TREE)tree->getChild(tree, i);
+        pANTLR3_BASE_TREE child = tree->getChild(tree, i);
 
-        treeToDot(child, out, nodeId);
-        fprintf(out, "  node%d -> node%d;\n", currentId, childId);
+        treeNodeToDot(child, dotFile, nodeId);
+        fprintf(dotFile, "  node%d -> node%d;\n", currentId, childId);
     }
+}
+
+
+void treeToDot(pANTLR3_BASE_TREE tree, FILE* dotFile)
+{
+    fprintf(dotFile, "digraph AST {\n  node [shape=box];\n");
+    int nodeId = 0;
+    treeNodeToDot(tree, dotFile, &nodeId);
+    fprintf(dotFile, "}\n");
 }

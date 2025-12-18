@@ -1,0 +1,30 @@
+method hello(x, y : int) : bool
+var result, temp: int;
+begin
+    result := (x + 1) * 2;
+    y + 9;
+    error := h;
+    if 23
+        then
+            if 99
+                then
+                    c + 9;
+                else
+                    c + 10;
+        else call_soul();
+    while a > b
+        do
+            if 23
+               then
+                   if 99
+                       then
+                           c + 9;
+                       else
+                           c + 10;
+               else call_soul();
+    x + 10;
+    break;
+    repeat
+        x := x + 1;
+        while x < 10;
+end;

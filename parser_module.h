@@ -20,6 +20,6 @@ typedef struct {
 ParseResult parseFile(const char* filename);
 void freeParseResult(ParseResult* result);
 void printTree(pANTLR3_BASE_TREE tree, int indent);
-void treeToDot(pANTLR3_BASE_TREE tree, FILE* out, int* nodeId);
+void treeToDot(pANTLR3_BASE_TREE tree, FILE* dotFile);
 
 #endif
