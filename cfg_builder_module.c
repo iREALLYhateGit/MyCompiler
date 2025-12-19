@@ -60,6 +60,67 @@ void cfgToDot(ControlFlowGraph* cfg, FILE* out)
 
 
 
+
+void cfgNodesToDot(ControlFlowGraph* cfg, FILE* out)
+{
+    fprintf(out, "digraph CFG {\n");
+    fprintf(out, "  node [shape=box];\n\n");
+
+    // ---- print nodes ----
+    for (int i = 0; i < cfg->node_count; i++)
+    {
+        CFGNode* node = cfg->nodes[i];
+
+        fprintf(out, "  n%d [label=\"%s\\n(id=%d)",
+            node->id,
+            nodeTypeToString(node->type),
+            node->id);
+
+        for (int s = 0; s < node->stmt_count; ++s)
+        {
+            pANTLR3_STRING ast = node->statements[s]->toStringTree(node->statements[s]);
+            fprintf(out, "\\n[%d] ", s);
+            fprintEscaped(out, (const char *)ast->chars);
+            ast->factory->destroy(ast->factory, ast);
+        }
+
+        fprintf(out, "\"];\n");
+    }
+
+    fprintf(out, "\n");
+
+    // ---- print edges based on nextDefault / nextConditional ----
+    for (int i = 0; i < cfg->node_count; i++)
+    {
+        CFGNode* node = cfg->nodes[i];
+
+        if (node->nextDefault)
+        {
+            fprintf(out, "  n%d -> n%d [label=\"nextDefault\"];\n",
+                    node->id, node->nextDefault->id);
+        }
+
+        if (node->nextConditional)
+        {
+            // Avoid duplicating the same arrow if both pointers coincide.
+            if (node->nextConditional == node->nextDefault)
+            {
+                fprintf(out, "  n%d -> n%d [label=\"nextDefault/nextConditional\"];\n",
+                        node->id, node->nextConditional->id);
+            }
+            else
+            {
+                fprintf(out, "  n%d -> n%d [label=\"nextConditional\" style=dashed];\n",
+                        node->id, node->nextConditional->id);
+            }
+        }
+    }
+
+    fprintf(out, "}\n");
+}
+
+
+
 // helper to keep DOT label valid
 static void fprintEscaped(FILE *out, const char *s) {
     for (; *s; ++s) {
@@ -158,6 +219,8 @@ static CFGNode* createCFGNode(NodeType type)
     node->type = type;
     node->statements = NULL;
     node->stmt_count = 0;
+    node->nextDefault = NULL;
+    node->nextConditional = NULL;
 
     return node;
 }
@@ -190,62 +253,81 @@ static void flowAppend(FlowResult* result_flow, FlowResult donor)
 // Рекурсивная функция обхода AST и построения CFG
 static FlowResult processStatement(pANTLR3_BASE_TREE node,
                              ControlFlowGraph* cfg,
-                             FlowResult flow_result) {
-
+                             FlowResult flow_result)
+{
     const char* node_text = get_ast_node_text(node);
 
     // Обработка узла IF.
-    if (strcmp(node_text, "IF") == 0) {
+    if (strcmp(node_text, "IF") == 0)
+    {
         FlowResult new_flow_result = processIfStatement(node, cfg, flow_result);
 
         return new_flow_result;
     }
     // Обработка узла while
-    else if (strcmp(node_text, "WHILE") == 0) {
+    else if (strcmp(node_text, "WHILE") == 0)
+    {
         FlowResult new_flow_result = processWhileStatement(node, cfg, flow_result);
 
         return new_flow_result;
     }
-    else if (strcmp(node_text, "REPEAT") == 0) {
+    else if (strcmp(node_text, "REPEAT") == 0)
+    {
         // Обработка цикла repeat
         FlowResult new_flow_result = processRepeatStatement(node, cfg, flow_result);
 
         return new_flow_result;
     }
-    else if (strcmp(node_text, "BREAK") == 0) {
+    else if (strcmp(node_text, "BREAK") == 0)
+    {
         // Обработка break
         FlowResult new_flow_result = processBreakStatement(node, cfg, flow_result);
 
         return new_flow_result;
     }
-    else if (strcmp(node_text, "BLOCK") == 0) {
+    else if (strcmp(node_text, "BLOCK") == 0)
+    {
         // Обработка блока statements
         ANTLR3_UINT32 child_count = node->getChildCount(node);
 
         FlowResult new_flow_result = flow_result;
 
-        for (ANTLR3_UINT32 i = 0; i < child_count; i++) {
+        for (ANTLR3_UINT32 i = 0; i < child_count; i++)
+        {
             pANTLR3_BASE_TREE child = node->getChild(node, i);
             new_flow_result = processStatement(child, cfg, new_flow_result);
         }
 
         return new_flow_result;
     }
-    else if (strcmp(node_text, "ASSIGN") == 0 || strcmp(node_text, "EXPRESSION") == 0) {
+    else if (strcmp(node_text, "ASSIGN") == 0 || strcmp(node_text, "EXPRESSION") == 0)
+    {
         CFGNode* current_block;
         bool continue_current_block = true;
         // Обработка блока statements
-        if (flow_result.exit_count == 1 && flow_result.exits[0]->type == NODE_BASIC_BLOCK) {
+        if (flow_result.exit_count == 1 && flow_result.exits[0]->type == NODE_BASIC_BLOCK)
+        {
             current_block = flow_result.exits[0];
         }
-        else {
+        else
+        {
             continue_current_block = false;
             current_block = createCFGNode(NODE_BASIC_BLOCK);
             cfg->nodes[cfg->node_count++] = current_block;
 
-            for (int i = 0; i < flow_result.exit_count; i++){
-                flow_result.exitsEdges[i]->to = current_block;
-                addEdge(cfg, flow_result.exitsEdges[i]);
+            for (int i = 0; i < flow_result.exit_count; i++)
+            {
+                CFGNode* exit_node = flow_result.exits[i];
+                CFGEdge* exit_edge = flow_result.exitsEdges[i];
+
+                exit_edge->to = current_block;
+                addEdge(cfg, exit_edge);
+
+                if (exit_edge->type == EDGE_TRUE)
+                    exit_node->nextConditional = current_block;
+
+                else
+                    exit_node->nextDefault = current_block;
             }
         }
 
@@ -256,7 +338,8 @@ static FlowResult processStatement(pANTLR3_BASE_TREE node,
 
         if (continue_current_block)
             return flow_result;
-        else {
+        else
+            {
             FlowResult flow_exits;
 
             flow_exits.exits = malloc(sizeof(CFGNode*));
@@ -272,7 +355,8 @@ static FlowResult processStatement(pANTLR3_BASE_TREE node,
         || strcmp(node_text, "DO") == 0 || strcmp(node_text, "REPEATABLE_PART") == 0) {
 
         FlowResult new_flow_result = flow_result;
-        for (ANTLR3_UINT32 i = 0; i < node->getChildCount(node); i++) {
+        for (ANTLR3_UINT32 i = 0; i < node->getChildCount(node); i++)
+        {
             pANTLR3_BASE_TREE child = node->getChild(node, i);
             new_flow_result = processStatement(child, cfg, new_flow_result);
         }
@@ -285,15 +369,25 @@ static FlowResult processStatement(pANTLR3_BASE_TREE node,
 // Обработка IF statement
 static FlowResult processIfStatement(pANTLR3_BASE_TREE if_node,
                             ControlFlowGraph* cfg,
-                            FlowResult flow_result) {
-
+                            FlowResult flow_entries)
+{
     CFGNode* if_block = createCFGNode(NODE_IF);
     // Добавляем узел в граф
     cfg->nodes[cfg->node_count++] = if_block;
 
-    for (int i = 0; i < flow_result.exit_count; i++){
-        flow_result.exitsEdges[i]->to = if_block;
-        addEdge(cfg, flow_result.exitsEdges[i]);
+    for (int i = 0; i < flow_entries.exit_count; i++)
+    {
+        CFGNode* exit_node = flow_entries.exits[i];
+        CFGEdge* exit_edge = flow_entries.exitsEdges[i];
+
+        exit_edge->to = if_block;
+        addEdge(cfg, exit_edge);
+
+        if (exit_edge->type == EDGE_TRUE)
+            exit_node->nextConditional = if_block;
+
+        else
+            exit_node->nextDefault = if_block;
     }
 
     // Находим condition, then и else части
@@ -303,10 +397,12 @@ static FlowResult processIfStatement(pANTLR3_BASE_TREE if_node,
     FlowResult end_of_else_block;
     bool else_block_present = false;
 
-    for (ANTLR3_UINT32 i = 0; i < child_count; i++) {
+    for (ANTLR3_UINT32 i = 0; i < child_count; i++)
+    {
         pANTLR3_BASE_TREE child_node = if_node->getChild(if_node, i);
 
-        if (strcmp(get_ast_node_text(child_node), "CONDITION") == 0) {
+        if (strcmp(get_ast_node_text(child_node), "CONDITION") == 0)
+        {
             pANTLR3_BASE_TREE condition_node = child_node;
             // Обработка блока statements
             if_block->statements = realloc(if_block->statements,
@@ -315,7 +411,8 @@ static FlowResult processIfStatement(pANTLR3_BASE_TREE if_node,
             if_block->statements[if_block->stmt_count++] = condition_node;
         }
 
-        else if (strcmp(get_ast_node_text(child_node), "THEN") == 0) {
+        else if (strcmp(get_ast_node_text(child_node), "THEN") == 0)
+        {
             pANTLR3_BASE_TREE then_node = child_node;
 
             FlowResult if_block_flow;
@@ -327,7 +424,8 @@ static FlowResult processIfStatement(pANTLR3_BASE_TREE if_node,
 
             end_of_then_block = processStatement(then_node, cfg, if_block_flow);
         }
-        else if (strcmp(get_ast_node_text(child_node), "ELSE") == 0) {
+        else if (strcmp(get_ast_node_text(child_node), "ELSE") == 0)
+        {
             pANTLR3_BASE_TREE else_node = child_node;
 
             else_block_present = true;
@@ -352,7 +450,8 @@ static FlowResult processIfStatement(pANTLR3_BASE_TREE if_node,
 
     if (else_block_present)
         flowAppend(&exit_flow_result, end_of_else_block);
-    else {
+    else
+    {
         FlowResult if_block_flow;
         if_block_flow.exits = malloc(sizeof(CFGNode*));
         if_block_flow.exits[0] = if_block;
@@ -376,9 +475,19 @@ static FlowResult processWhileStatement(pANTLR3_BASE_TREE while_node,
     // Добавляем узел в граф
     cfg->nodes[cfg->node_count++] = while_block;
 
-    for (int i = 0; i < flow_entries.exit_count; i++){
-        flow_entries.exitsEdges[i]->to = while_block;
-        addEdge(cfg, flow_entries.exitsEdges[i]);
+    for (int i = 0; i < flow_entries.exit_count; i++)
+    {
+        CFGNode* exit_node = flow_entries.exits[i];
+        CFGEdge* exit_edge = flow_entries.exitsEdges[i];
+
+        exit_edge->to = while_block;
+        addEdge(cfg, exit_edge);
+
+        if (exit_edge->type == EDGE_TRUE)
+            exit_node->nextConditional = while_block;
+
+        else
+            exit_node->nextDefault = while_block;
     }
 
     // Находим condition, then и else части
@@ -386,10 +495,12 @@ static FlowResult processWhileStatement(pANTLR3_BASE_TREE while_node,
 
     FlowResult end_of_do_block;
 
-    for (ANTLR3_UINT32 i = 0; i < child_count; i++) {
+    for (ANTLR3_UINT32 i = 0; i < child_count; i++)
+    {
         pANTLR3_BASE_TREE child_node = while_node->getChild(while_node, i);
 
-        if (strcmp(get_ast_node_text(child_node), "CONDITION") == 0) {
+        if (strcmp(get_ast_node_text(child_node), "CONDITION") == 0)
+        {
             pANTLR3_BASE_TREE condition_node = child_node;
             // Обработка блока statements
             while_block->statements = realloc(while_block->statements,
@@ -398,7 +509,8 @@ static FlowResult processWhileStatement(pANTLR3_BASE_TREE while_node,
             while_block->statements[while_block->stmt_count++] = condition_node;
         }
 
-        else if (strcmp(get_ast_node_text(child_node), "DO") == 0) {
+        else if (strcmp(get_ast_node_text(child_node), "DO") == 0)
+        {
             pANTLR3_BASE_TREE do_node = child_node;
             // Обрабатываем then часть
             FlowResult while_block_flow;
@@ -410,9 +522,19 @@ static FlowResult processWhileStatement(pANTLR3_BASE_TREE while_node,
 
             end_of_do_block = processStatement(do_node, cfg, while_block_flow);
 
-            for (int k = 0; k < end_of_do_block.exit_count; k++) {
-                end_of_do_block.exitsEdges[k]->to = while_block;
-                addEdge(cfg, end_of_do_block.exitsEdges[k]);
+            for (int k = 0; k < end_of_do_block.exit_count; k++)
+            {
+                CFGNode* exit_node = end_of_do_block.exits[k];
+                CFGEdge* exit_edge = end_of_do_block.exitsEdges[k];
+
+                exit_edge->to = while_block;
+                addEdge(cfg, exit_edge);
+
+                if (exit_edge->type == EDGE_TRUE)
+                    exit_node->nextConditional = while_block;
+
+                else
+                    exit_node->nextDefault = while_block;
             }
         }
     }
@@ -438,9 +560,19 @@ static FlowResult processRepeatStatement(pANTLR3_BASE_TREE repeat_node,
     // Добавляем узел в граф
     cfg->nodes[cfg->node_count++] = repeatable_part_block;
 
-    for (int i = 0; i < flow_entries.exit_count; i++){
-        flow_entries.exitsEdges[i]->to = repeatable_part_block;
-        addEdge(cfg, flow_entries.exitsEdges[i]);
+    for (int i = 0; i < flow_entries.exit_count; i++)
+    {
+        CFGNode* exit_node = flow_entries.exits[i];
+        CFGEdge* exit_edge = flow_entries.exitsEdges[i];
+
+        exit_edge->to = repeatable_part_block;
+        addEdge(cfg, exit_edge);
+
+        if (exit_edge->type == EDGE_TRUE)
+            exit_node->nextConditional = repeatable_part_block;
+
+        else
+            exit_node->nextDefault = repeatable_part_block;
     }
 
     // Находим condition, then и else части
@@ -448,10 +580,12 @@ static FlowResult processRepeatStatement(pANTLR3_BASE_TREE repeat_node,
 
     FlowResult end_of_repeatable_part_flow;
 
-    for (ANTLR3_UINT32 i = 0; i < child_count; i++) {
+    for (ANTLR3_UINT32 i = 0; i < child_count; i++)
+    {
         pANTLR3_BASE_TREE child_node = repeat_node->getChild(repeat_node, i);
 
-        if (strcmp(get_ast_node_text(child_node), "REPEATABLE_PART") == 0) {
+        if (strcmp(get_ast_node_text(child_node), "REPEATABLE_PART") == 0)
+        {
             pANTLR3_BASE_TREE repeatable_part_node = child_node;
 
             FlowResult flow_repeatable_part;
@@ -468,10 +602,12 @@ static FlowResult processRepeatStatement(pANTLR3_BASE_TREE repeat_node,
 
     FlowResult flow_exits;
 
-    for (ANTLR3_UINT32 i = 0; i < child_count; i++) {
+    for (ANTLR3_UINT32 i = 0; i < child_count; i++)
+    {
         pANTLR3_BASE_TREE child_node = repeat_node->getChild(repeat_node, i);
 
-        if (strcmp(get_ast_node_text(child_node), "UNTIL") == 0) {
+        if (strcmp(get_ast_node_text(child_node), "UNTIL") == 0)
+        {
             pANTLR3_BASE_TREE condition_node = child_node;
             // Обработка блока statements
 
@@ -483,15 +619,28 @@ static FlowResult processRepeatStatement(pANTLR3_BASE_TREE repeat_node,
                                                sizeof(pANTLR3_BASE_TREE));
             until_block->statements[until_block->stmt_count++] = condition_node;
 
-            for (int k = 0; k < end_of_repeatable_part_flow.exit_count; k++){
-                CFGEdge* edge = end_of_repeatable_part_flow.exitsEdges[k];
-                end_of_repeatable_part_flow.exitsEdges[k]->to = until_block;
-                addEdge(cfg, end_of_repeatable_part_flow.exitsEdges[k]);
+            for (int k = 0; k < end_of_repeatable_part_flow.exit_count; k++)
+            {
+                CFGNode* exit_node = end_of_repeatable_part_flow.exits[k];
+                CFGEdge* exit_edge = end_of_repeatable_part_flow.exitsEdges[k];
+
+                exit_edge->to = until_block;
+                addEdge(cfg, exit_edge);
+
+                if (exit_edge->type == EDGE_TRUE)
+                    exit_node->nextConditional = until_block;
+                else
+                    exit_node->nextDefault = until_block;
             }
 
             CFGEdge* until_to_repeatable_part = createCFGEdge(until_block, repeatable_part_block, EDGE_TRUE);
 
             addEdge(cfg, until_to_repeatable_part);
+
+            if (until_to_repeatable_part->type == EDGE_TRUE)
+                until_block->nextConditional = repeatable_part_block;
+            else
+                until_block->nextDefault = repeatable_part_block;
 
             flow_exits.exits = malloc(sizeof(CFGNode*));
             flow_exits.exits[0] = until_block;
@@ -537,19 +686,23 @@ static FlowResult processBreakStatement(pANTLR3_BASE_TREE break_node,
 
 static pANTLR3_BASE_TREE skipUselessTokens(pANTLR3_BASE_TREE tree)
 {
-    if (tree == NULL) {
+    if (tree == NULL)
+    {
         return NULL;
     }
 
-    if (strcmp(get_ast_node_text(tree), "BLOCK") == 0) {
+    if (strcmp(get_ast_node_text(tree), "BLOCK") == 0)
+    {
         return tree;
     }
 
     ANTLR3_UINT32 count = tree->getChildCount(tree);
-    for (ANTLR3_UINT32 i = 0; i < count; i++) {
+    for (ANTLR3_UINT32 i = 0; i < count; i++)
+    {
         pANTLR3_BASE_TREE result = skipUselessTokens(tree->getChild(tree, i));
 
-        if (result != NULL) {
+        if (result != NULL)
+        {
             return result;
         }
     }
@@ -599,15 +752,28 @@ ControlFlowGraph* buildCFG(pANTLR3_BASE_TREE tree)
     cfg->exit = createCFGNode(NODE_EXIT);
     cfg->nodes[cfg->node_count++] = cfg->exit;
 
-    if (blockNode != NULL) {
-        for (int i = 0; i < result_flow.exit_count; i++) {
-            result_flow.exitsEdges[i]->to = cfg->exit;
-            addEdge(cfg, result_flow.exitsEdges[i]);
+    if (blockNode != NULL)
+    {
+        for (int i = 0; i < result_flow.exit_count; i++)
+        {
+            CFGNode* exit_node = result_flow.exits[i];
+            CFGEdge* exit_edge = result_flow.exitsEdges[i];
+
+            exit_edge->to = cfg->exit;
+            addEdge(cfg, exit_edge);
+
+            if (exit_edge->type == EDGE_TRUE)
+                exit_node->nextConditional = cfg->exit;
+            else
+                exit_node->nextDefault = cfg->exit;
         }
     }
-    else {
+    else
+    {
         entryEdge->to = cfg->exit;
         addEdge(cfg, entryEdge);
+
+        cfg->entry->nextDefault = cfg->exit;
     }
 
     return cfg;

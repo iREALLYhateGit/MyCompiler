@@ -63,6 +63,7 @@ typedef struct {
 // Функции для работы с CFG
 ControlFlowGraph* buildCFG(pANTLR3_BASE_TREE tree);
 void cfgToDot(ControlFlowGraph* cfg, FILE* out);
+void cfgNodesToDot(ControlFlowGraph* cfg, FILE* out);
 void freeCFG(ControlFlowGraph* cfg);
 
 #endif

@@ -51,7 +51,8 @@ char* get_clean_filename(const char* fullpath) {
 }
 
 // Функция обработки одного файла
-int process_file(const char* input_file, const char* ast_dir, const char* cfg_dir) {
+int process_file(const char* input_file, const char* ast_dir, const char* cfg_dir)
+{
     printf("\n=== Processing file: %s ===\n", input_file);
 
     ParseResult result = parseFile(input_file);
@@ -109,7 +110,8 @@ int process_file(const char* input_file, const char* ast_dir, const char* cfg_di
                 return 0;
             }
 
-            cfgToDot(cfg, cfg_file);
+            // cfgToDot(cfg, cfg_file);
+            cfgNodesToDot(cfg, cfg_file);
             fclose(cfg_file);
 
             printf("CFG saved to: %s\n", cfg_path);
@@ -179,19 +181,23 @@ void print_help(const char* program_name) {
     printf("    --multiple    Enter multiple files mode\n");
 }
 
-int main(int argc, char* argv[]) {
+int main(int argc, char* argv[])
+{
     // Проверка на запрос справки
-    if (argc >= 2 && (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0)) {
+    if (argc >= 2 && (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0))
+    {
         print_help(argv[0]);
         return 0;
     }
 
     // Режим обработки одного файла
-    if (argc == 4 && strcmp(argv[1], "--multiple") != 0) {
+    if (argc == 4 && strcmp(argv[1], "--multiple") != 0)
+    {
 
         ParseResult result = parseFile(argv[1]);
 
-        if (!result.tree) {
+        if (!result.tree)
+        {
             fprintf(stderr, "AST tree creation failed due to some unexpected ERROR.\n");
             freeParseResult(&result);
             return 1;
@@ -200,7 +206,8 @@ int main(int argc, char* argv[]) {
         if (result.errorCount == 0)
             printf("Input file has been successfully parsed!\n");
 
-        else {
+        else
+        {
             printf("Input file was parsed with errors:\n");
             // Ошибки
             for (int i = 0; i < result.errorCount; i++)
@@ -211,7 +218,8 @@ int main(int argc, char* argv[]) {
         printTree(result.tree, 0);
 
         FILE* dotFile = fopen(argv[2], "w");
-        if (!dotFile) {
+        if (!dotFile)
+        {
             fprintf(stderr, "Cannot open output file for ast.\n");
             freeParseResult(&result);
             return 1;
@@ -221,18 +229,23 @@ int main(int argc, char* argv[]) {
         treeToDot(result.tree, dotFile);
         fclose(dotFile);
 
-        if (result.errorCount == 0) {
+        if (result.errorCount == 0)
+        {
             ControlFlowGraph* cfg = buildCFG(result.tree);
 
-            if (cfg) {
+            if (cfg)
+            {
                 FILE* cfgDot = fopen(argv[3], "w");
-                if (!cfgDot) {
+                if (!cfgDot)
+                {
                     fprintf(stderr, "Cannot open output file for ast.\n");
                     freeParseResult(&result);
                     return 1;
                 }
 
-                cfgToDot(cfg, cfgDot);
+                // cfgToDot(cfg, cfgDot);
+                cfgNodesToDot(cfg, cfgDot);
+
                 fclose(cfgDot);
                 // freeCFG(cfg);
             }
@@ -247,24 +260,29 @@ int main(int argc, char* argv[]) {
     }
 
     // Режим обработки нескольких файлов
-    if (argc >= 3 && strcmp(argv[1], "--multiple") == 0) {
+    if (argc >= 3 && strcmp(argv[1], "--multiple") == 0)
+    {
         // Создаем выходные директории
         const char* ast_dir = "output_ast_trees";
         const char* cfg_dir = "output_cfg_trees";
 
         // Создаем директории, если они не существуют
-        if (create_directory(ast_dir) != 0) {
+        if (create_directory(ast_dir) != 0)
+        {
             // Проверяем, существует ли уже директория
             struct stat st;
-            if (stat(ast_dir, &st) != 0) {
+            if (stat(ast_dir, &st) != 0)
+            {
                 fprintf(stderr, "Failed to create AST directory: %s\n", ast_dir);
                 return 1;
             }
         }
 
-        if (create_directory(cfg_dir) != 0) {
+        if (create_directory(cfg_dir) != 0)
+        {
             struct stat st;
-            if (stat(cfg_dir, &st) != 0) {
+            if (stat(cfg_dir, &st) != 0)
+            {
                 fprintf(stderr, "Failed to create CFG directory: %s\n", cfg_dir);
                 return 1;
             }
@@ -278,8 +296,10 @@ int main(int argc, char* argv[]) {
         int processed_count = 0;
         int total_files = argc - 2; // минус имя программы и --multiple
 
-        for (int i = 2; i < argc; i++) {
-            if (process_file(argv[i], ast_dir, cfg_dir)) {
+        for (int i = 2; i < argc; i++)
+        {
+            if (process_file(argv[i], ast_dir, cfg_dir))
+            {
                 processed_count++;
             }
             printf("\n");
@@ -299,75 +319,3 @@ int main(int argc, char* argv[]) {
     print_help(argv[0]);
     return 1;
 }
-
-
-
-
-
-
-
-
-
-
-
-// int main(int argc, char* argv[])
-// {
-//     if (argc < 3) {
-//         fprintf(stderr, "Usage: %s <input_file> <output_file>\n", argv[0]);
-//         return 1;
-//     }
-//
-//     ParseResult result = parseFile(argv[1]);
-//
-//     // Ошибки
-//     for (int i = 0; i < result.errorCount; i++)
-//         fprintf(stderr, "Error: %s\n", result.errors[i]);
-//
-//     if (!result.tree) {
-//         fprintf(stderr, "Tree creation failed.\n");
-//         freeParseResult(&result);
-//         return 1;
-//     }
-//
-//     printf("Syntactic tree:\n");
-//     printTree(result.tree, 0);
-//
-//     FILE* dotFile = fopen(argv[2], "w");
-//     if (!dotFile) {
-//         fprintf(stderr, "Cannot open output file\n");
-//         freeParseResult(&result);
-//         return 1;
-//     }
-//
-//     fprintf(dotFile, "digraph AST {\n  node [shape=box];\n");
-//     int nodeId = 0;
-//     treeToDot(result.tree, dotFile, &nodeId);
-//     fprintf(dotFile, "}\n");
-//     fclose(dotFile);
-//
-//     ControlFlowGraph* cfg = buildCFG(result.tree);
-//
-//     for (int i = 0; i < cfg->node_count; i++) {
-//         printf("%d\n", cfg->nodes[i]->id);
-//         printf("%s\n", cfg->nodes[i]->label);
-//         for (int k = 0; k < cfg->nodes[i]->stmt_count; k++) {
-//             printTree(cfg->nodes[i]->statements[k], 0);
-//         }
-//     }
-//
-//     FILE* cfgDot = fopen("cfg.dot", "w");
-//     if (!cfgDot) {
-//         fprintf(stderr, "Cannot open cfg.dot\n");
-//         return 1;
-//     }
-//
-//     cfgToDot(cfg, cfgDot);
-//     fclose(cfgDot);
-//
-//
-//     freeParseResult(&result);
-//
-//     printf("\nTree is stored into tree.dot\n");
-//     printf("To visualise execute: dot -Tpng tree.dot -o tree.png\n");
-//     return 0;
-// }
