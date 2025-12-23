@@ -26,10 +26,10 @@ void cfgToDot(ControlFlowGraph* cfg, FILE* out)
 
         for (int s = 0; s < node->stmt_count; ++s)
         {
-            pANTLR3_STRING ast = node->statements[s]->toStringTree(node->statements[s]);
+            char* op_text = opTreeToString(node->statements[s]);
             fprintf(out, "\\n[%d] ", s);
-            fprintEscaped(out, (const char *)ast->chars);
-            ast->factory->destroy(ast->factory, ast);
+            fprintEscaped(out, op_text);
+            free(op_text);
         }
 
         fprintf(out, "\"];\n");
@@ -78,10 +78,10 @@ void cfgNodesToDot(ControlFlowGraph* cfg, FILE* out)
 
         for (int s = 0; s < node->stmt_count; ++s)
         {
-            pANTLR3_STRING ast = node->statements[s]->toStringTree(node->statements[s]);
+            char* op_text = opTreeToString(node->statements[s]);
             fprintf(out, "\\n[%d] ", s);
-            fprintEscaped(out, (const char *)ast->chars);
-            ast->factory->destroy(ast->factory, ast);
+            fprintEscaped(out, op_text);
+            free(op_text);
         }
 
         fprintf(out, "\"];\n");
@@ -333,8 +333,8 @@ static FlowResult processStatement(pANTLR3_BASE_TREE node,
 
         current_block->statements = realloc(current_block->statements,
                                            (current_block->stmt_count + 1) *
-                                           sizeof(pANTLR3_BASE_TREE));
-        current_block->statements[current_block->stmt_count++] = node;
+                                           sizeof(OpNode*));
+        current_block->statements[current_block->stmt_count++] = buildOpTree(node);
 
         if (continue_current_block)
             return flow_result;
@@ -407,8 +407,8 @@ static FlowResult processIfStatement(pANTLR3_BASE_TREE if_node,
             // Обработка блока statements
             if_block->statements = realloc(if_block->statements,
                                                (if_block->stmt_count + 1) *
-                                               sizeof(pANTLR3_BASE_TREE));
-            if_block->statements[if_block->stmt_count++] = condition_node;
+                                               sizeof(OpNode*));
+            if_block->statements[if_block->stmt_count++] = buildOpTree(condition_node);
         }
 
         else if (strcmp(get_ast_node_text(child_node), "THEN") == 0)
@@ -505,8 +505,8 @@ static FlowResult processWhileStatement(pANTLR3_BASE_TREE while_node,
             // Обработка блока statements
             while_block->statements = realloc(while_block->statements,
                                                (while_block->stmt_count + 1) *
-                                               sizeof(pANTLR3_BASE_TREE));
-            while_block->statements[while_block->stmt_count++] = condition_node;
+                                               sizeof(OpNode*));
+            while_block->statements[while_block->stmt_count++] = buildOpTree(condition_node);
         }
 
         else if (strcmp(get_ast_node_text(child_node), "DO") == 0)
@@ -616,8 +616,8 @@ static FlowResult processRepeatStatement(pANTLR3_BASE_TREE repeat_node,
 
             until_block->statements = realloc(until_block->statements,
                                                (until_block->stmt_count + 1) *
-                                               sizeof(pANTLR3_BASE_TREE));
-            until_block->statements[until_block->stmt_count++] = condition_node;
+                                               sizeof(OpNode*));
+            until_block->statements[until_block->stmt_count++] = buildOpTree(condition_node);
 
             for (int k = 0; k < end_of_repeatable_part_flow.exit_count; k++)
             {

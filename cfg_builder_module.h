@@ -3,6 +3,8 @@
 
 #include <antlr3.h>
 
+#include "op_tree.h"
+
 // Новые структуры для CFG
 typedef enum {
     NODE_BASIC_BLOCK,
@@ -20,7 +22,7 @@ typedef struct CFGNode {
     int id;
     NodeType type;
     // Для basic block
-    pANTLR3_BASE_TREE* statements;
+    OpNode** statements;
     int stmt_count;
     struct CFGNode* nextDefault;
     struct CFGNode* nextConditional;
