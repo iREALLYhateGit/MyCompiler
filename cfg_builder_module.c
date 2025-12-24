@@ -177,6 +177,223 @@ static char* get_ast_node_text(pANTLR3_BASE_TREE node)
     return strdup((char*)text->chars);
 }
 
+typedef struct {
+    char* data;
+    size_t len;
+    size_t cap;
+} StringBuilder;
+
+static void sbInit(StringBuilder* sb)
+{
+    sb->cap = 32;
+    sb->len = 0;
+    sb->data = malloc(sb->cap);
+    sb->data[0] = '\0';
+}
+
+static void sbEnsure(StringBuilder* sb, size_t extra)
+{
+    size_t needed = sb->len + extra + 1;
+    if (needed <= sb->cap) {
+        return;
+    }
+
+    size_t new_cap = sb->cap * 2;
+    while (new_cap < needed) {
+        new_cap *= 2;
+    }
+
+    sb->data = realloc(sb->data, new_cap);
+    sb->cap = new_cap;
+}
+
+static void sbAppend(StringBuilder* sb, const char* text)
+{
+    if (!text || text[0] == '\0') {
+        return;
+    }
+
+    size_t add = strlen(text);
+    sbEnsure(sb, add);
+    memcpy(sb->data + sb->len, text, add);
+    sb->len += add;
+    sb->data[sb->len] = '\0';
+}
+
+static void sbAppendChar(StringBuilder* sb, char c)
+{
+    sbEnsure(sb, 1);
+    sb->data[sb->len++] = c;
+    sb->data[sb->len] = '\0';
+}
+
+static void flattenTreeTextRec(StringBuilder* sb, pANTLR3_BASE_TREE node)
+{
+    if (!node) {
+        return;
+    }
+
+    const char* text = get_ast_node_text(node);
+    if (text[0] != '\0') {
+        if (sb->len > 0) {
+            sbAppendChar(sb, ' ');
+        }
+        sbAppend(sb, text);
+    }
+
+    ANTLR3_UINT32 count = node->getChildCount(node);
+    for (ANTLR3_UINT32 i = 0; i < count; i++) {
+        flattenTreeTextRec(sb, node->getChild(node, i));
+    }
+}
+
+static char* flattenTreeText(pANTLR3_BASE_TREE node)
+{
+    StringBuilder sb;
+    sbInit(&sb);
+    flattenTreeTextRec(&sb, node);
+    return sb.data;
+}
+
+static pANTLR3_BASE_TREE findChildByText(pANTLR3_BASE_TREE node, const char* text)
+{
+    ANTLR3_UINT32 count = node->getChildCount(node);
+
+    for (ANTLR3_UINT32 i = 0; i < count; i++)
+    {
+        pANTLR3_BASE_TREE child = node->getChild(node, i);
+        if (strcmp(get_ast_node_text(child), text) == 0)
+        {
+            return child;
+        }
+    }
+
+    return NULL;
+}
+
+static char* extractTypeText(pANTLR3_BASE_TREE node)
+{
+    if (!node) {
+        return NULL;
+    }
+
+    if (strcmp(get_ast_node_text(node), "VOID_VALUE") == 0) {
+        return strdup("void");
+    }
+
+    return flattenTreeText(node);
+}
+
+static char* extractIdText(pANTLR3_BASE_TREE id_node)
+{
+    if (id_node->getChildCount(id_node) > 0) {
+        return strdup(get_ast_node_text(id_node->getChild(id_node, 0)));
+    }
+
+    return strdup(get_ast_node_text(id_node));
+}
+
+static void initSubprogramInfo(SubprogramInfo* info)
+{
+    info->name = NULL;
+    info->param_names = NULL;
+    info->param_types = NULL;
+    info->param_count = 0;
+    info->return_type = NULL;
+    info->local_names = NULL;
+    info->local_types = NULL;
+    info->local_count = 0;
+    info->source_file = NULL;
+    info->cfg = NULL;
+}
+
+static void fillSubprogramInfo(SubprogramInfo* info, pANTLR3_BASE_TREE method_node)
+{
+    pANTLR3_BASE_TREE name_node = findChildByText(method_node, "ID");
+    if (name_node)
+        info->name = extractIdText(name_node);
+
+    pANTLR3_BASE_TREE params_node = findChildByText(method_node, "PARAMETERS");
+    if (params_node)
+    {
+        int count = (int)params_node->getChildCount(params_node);
+        if (count > 0)
+        {
+            info->param_count = count;
+            info->param_names = calloc(count, sizeof(char*));
+            info->param_types = calloc(count, sizeof(char*));
+
+            for (int i = 0; i < count; i++)
+            {
+                pANTLR3_BASE_TREE param_node = params_node->getChild(params_node, i);
+                pANTLR3_BASE_TREE param_id = findChildByText(param_node, "ID");
+                info->param_names[i] = extractIdText(param_id);
+
+                pANTLR3_BASE_TREE type_node = findChildByText(param_node, "TYPE");
+                if (type_node && type_node->getChildCount(type_node) > 0)
+                {
+                    info->param_types[i] = extractTypeText(type_node->getChild(type_node, 0));
+                }
+            }
+        }
+    }
+
+    pANTLR3_BASE_TREE return_node = findChildByText(method_node, "RETURN_TYPE");
+    if (return_node && return_node->getChildCount(return_node) > 0) {
+        info->return_type = extractTypeText(return_node->getChild(return_node, 0));
+    }
+
+    pANTLR3_BASE_TREE body_node = findChildByText(method_node, "BODY");
+    if (body_node)
+    {
+        pANTLR3_BASE_TREE var_declarations_node = findChildByText(body_node, "VAR_DECLARATIONS");
+        if (var_declarations_node && var_declarations_node->getChildCount(var_declarations_node) > 0)
+        {
+            ANTLR3_UINT32 var_declaration_count = var_declarations_node->getChildCount(var_declarations_node);
+
+            for (int i = 0; i < var_declaration_count; i++)
+            {
+                pANTLR3_BASE_TREE var_decl_node = var_declarations_node->getChild(var_declarations_node, i);
+                pANTLR3_BASE_TREE type_node = findChildByText(var_decl_node, "TYPE");
+                char* decl_type = NULL;
+                if (type_node && type_node->getChildCount(type_node) > 0)
+                {
+                    decl_type = extractTypeText(type_node->getChild(type_node, 0));
+                }
+
+                pANTLR3_BASE_TREE vars_node = findChildByText(var_decl_node, "VARIABLES");
+                if (vars_node)
+                {
+                    ANTLR3_UINT32 vars_count = vars_node->getChildCount(vars_node);
+                    for (ANTLR3_UINT32 j = 0; j < vars_count; j++)
+                    {
+                        pANTLR3_BASE_TREE var_id = vars_node->getChild(vars_node, j);
+                        char* var_name = extractIdText(var_id);
+
+                        info->local_names = realloc(info->local_names, sizeof(char*) * (info->local_count + 1));
+                        info->local_types = realloc(info->local_types, sizeof(char*) * (info->local_count + 1));
+                        info->local_names[info->local_count] = var_name;
+                        info->local_types[info->local_count] = decl_type ? strdup(decl_type) : NULL;
+                        info->local_count++;
+                    }
+                }
+
+                if (decl_type)
+                {
+                    free(decl_type);
+                }
+            }
+        }
+
+        pANTLR3_BASE_TREE block_node = findChildByText(body_node, "BLOCK");
+        if (block_node && block_node->getChildCount(block_node) > 0)
+        {
+            info->cfg = buildCFG(block_node);
+        }
+    }
+
+}
+
 
 const char* nodeTypeToString(NodeType type)
 {
@@ -377,17 +594,17 @@ static FlowResult processIfStatement(pANTLR3_BASE_TREE if_node,
 
     for (int i = 0; i < flow_entries.exit_count; i++)
     {
-        CFGNode* exit_node = flow_entries.exits[i];
-        CFGEdge* exit_edge = flow_entries.exitsEdges[i];
+        CFGNode* entry_node = flow_entries.exits[i];
+        CFGEdge* entry_edge = flow_entries.exitsEdges[i];
 
-        exit_edge->to = if_block;
-        addEdge(cfg, exit_edge);
+        entry_edge->to = if_block;
+        addEdge(cfg, entry_edge);
 
-        if (exit_edge->type == EDGE_TRUE)
-            exit_node->nextConditional = if_block;
+        if (entry_edge->type == EDGE_TRUE)
+            entry_node->nextConditional = if_block;
 
         else
-            exit_node->nextDefault = if_block;
+            entry_node->nextDefault = if_block;
     }
 
     // Находим condition, then и else части
@@ -686,11 +903,6 @@ static FlowResult processBreakStatement(pANTLR3_BASE_TREE break_node,
 
 static pANTLR3_BASE_TREE skipUselessTokens(pANTLR3_BASE_TREE tree)
 {
-    if (tree == NULL)
-    {
-        return NULL;
-    }
-
     if (strcmp(get_ast_node_text(tree), "BLOCK") == 0)
     {
         return tree;
@@ -710,13 +922,26 @@ static pANTLR3_BASE_TREE skipUselessTokens(pANTLR3_BASE_TREE tree)
     return NULL;
 }
 
-
-
-
-ControlFlowGraph* buildCFG(pANTLR3_BASE_TREE tree)
+static pANTLR3_BASE_TREE findMethodDeclaration(pANTLR3_BASE_TREE tree)
 {
-    if (!tree) return NULL;
+    if (strcmp(get_ast_node_text(tree), "METHOD_DECL") == 0)
+    {
+        return tree;
+    }
 
+    for (ANTLR3_UINT32 i = 0; i < tree->getChildCount(tree); i++)
+    {
+        return  findMethodDeclaration(tree->getChild(tree, i));
+    }
+
+    return NULL;
+}
+
+
+
+
+ControlFlowGraph* buildCFG(pANTLR3_BASE_TREE blockNode)
+{
     ControlFlowGraph* cfg = malloc(sizeof(ControlFlowGraph));
 
     cfg->max_nodes = 100;
@@ -742,39 +967,52 @@ ControlFlowGraph* buildCFG(pANTLR3_BASE_TREE tree)
     entry_block_flow.exit_count = 1;
 
     // Рекурсивно строим CFG
-    pANTLR3_BASE_TREE blockNode = skipUselessTokens(tree);
-
-    FlowResult result_flow;
-    if (blockNode != NULL) {
-        result_flow = processStatement(blockNode, cfg, entry_block_flow);
-    }
+    FlowResult result_flow = processStatement(blockNode, cfg, entry_block_flow);
 
     cfg->exit = createCFGNode(NODE_EXIT);
     cfg->nodes[cfg->node_count++] = cfg->exit;
 
-    if (blockNode != NULL)
+    for (int i = 0; i < result_flow.exit_count; i++)
     {
-        for (int i = 0; i < result_flow.exit_count; i++)
-        {
-            CFGNode* exit_node = result_flow.exits[i];
-            CFGEdge* exit_edge = result_flow.exitsEdges[i];
+        CFGNode* exit_node = result_flow.exits[i];
+        CFGEdge* exit_edge = result_flow.exitsEdges[i];
 
-            exit_edge->to = cfg->exit;
-            addEdge(cfg, exit_edge);
+        exit_edge->to = cfg->exit;
+        addEdge(cfg, exit_edge);
 
-            if (exit_edge->type == EDGE_TRUE)
-                exit_node->nextConditional = cfg->exit;
-            else
-                exit_node->nextDefault = cfg->exit;
-        }
+        if (exit_edge->type == EDGE_TRUE)
+            exit_node->nextConditional = cfg->exit;
+        else
+            exit_node->nextDefault = cfg->exit;
     }
-    else
-    {
-        entryEdge->to = cfg->exit;
-        addEdge(cfg, entryEdge);
-
-        cfg->entry->nextDefault = cfg->exit;
-    }
+    // else
+    // {
+    //     entryEdge->to = cfg->exit;
+    //     addEdge(cfg, entryEdge);
+    //
+    //     cfg->entry->nextDefault = cfg->exit;
+    // }
 
     return cfg;
+}
+
+SubprogramInfo* generateSubprogramInfo(const char* source_file, pANTLR3_BASE_TREE tree)
+{
+    SubprogramInfo* info = malloc(sizeof(SubprogramInfo));
+    initSubprogramInfo(info);
+
+    info->source_file = strdup(source_file);
+
+    pANTLR3_BASE_TREE methodNode = findMethodDeclaration(tree);
+
+    if (methodNode)
+    {
+        fillSubprogramInfo(info, methodNode);
+    }
+
+    else {
+        return NULL;
+    }
+
+    return info;
 }
