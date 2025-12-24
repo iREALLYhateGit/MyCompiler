@@ -51,7 +51,7 @@ typedef struct {
     int exit_count;
 } FlowResult;
 
-typedef struct {
+typedef struct ControlFlowGraph {
     CFGNode* entry;
     CFGNode* exit;
     CFGNode** nodes;
@@ -62,8 +62,23 @@ typedef struct {
     int max_edges;
 } ControlFlowGraph;
 
+
+typedef struct {
+    char* name;
+    char** param_names;
+    char** param_types;
+    int param_count;
+    char* return_type;
+    char** local_names;
+    char** local_types;
+    int local_count;
+    char* source_file;
+    ControlFlowGraph* cfg;
+} SubprogramInfo;
+
 // Функции для работы с CFG
-ControlFlowGraph* buildCFG(pANTLR3_BASE_TREE tree);
+ControlFlowGraph* buildCFG(pANTLR3_BASE_TREE block_node);
+SubprogramInfo* generateSubprogramInfo(const char* source_file, pANTLR3_BASE_TREE tree);
 void cfgToDot(ControlFlowGraph* cfg, FILE* out);
 void cfgNodesToDot(ControlFlowGraph* cfg, FILE* out);
 void freeCFG(ControlFlowGraph* cfg);

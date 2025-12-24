@@ -11,7 +11,6 @@ int create_directory(const char* path) {
     return mkdir(path);
 }
 
-
 // Функция для извлечения чистого имени файла без пути и расширения
 char* get_clean_filename(const char* fullpath) {
     const char* filename = fullpath;
@@ -57,17 +56,17 @@ int process_file(const char* input_file, const char* ast_dir, const char* cfg_di
 
     ParseResult result = parseFile(input_file);
 
+    if (!result.tree) {
+        fprintf(stderr, "Tree creation failed for %s\n", input_file);
+        freeParseResult(&result);
+        return 0;
+    }
+
     // Проверка ошибок
     int has_errors = 0;
     for (int i = 0; i < result.errorCount; i++) {
         fprintf(stderr, "Error in %s: %s\n", input_file, result.errors[i]);
         has_errors = 1;
-    }
-
-    if (!result.tree) {
-        fprintf(stderr, "Tree creation failed for %s\n", input_file);
-        freeParseResult(&result);
-        return 0;
     }
 
     // Получаем чистое имя файла (без пути и расширения)
@@ -92,10 +91,13 @@ int process_file(const char* input_file, const char* ast_dir, const char* cfg_di
     printf("AST saved to: %s\n", ast_path);
 
     // Строим CFG только если нет ошибок в AST
-    if (!has_errors) {
-        ControlFlowGraph* cfg = buildCFG(result.tree);
+    if (!has_errors)
+    {
+        SubprogramInfo* subprogram = generateSubprogramInfo(input_file, result.tree);
 
-        if (cfg) {
+        if (subprogram && subprogram->cfg)
+        {
+            ControlFlowGraph* cfg = subprogram->cfg;
             // Генерируем CFG DOT файл
             char cfg_path[1024];
             snprintf(cfg_path, sizeof(cfg_path), "%s%c%s_cfg.dot",
@@ -115,6 +117,16 @@ int process_file(const char* input_file, const char* ast_dir, const char* cfg_di
             fclose(cfg_file);
 
             printf("CFG saved to: %s\n", cfg_path);
+
+            printf("source_file = %s\n method_name = %s\n return_type = %s\n", subprogram->source_file, subprogram->name, subprogram->return_type);
+            for (int i = 0; i < subprogram->param_count; i++)
+            {
+                printf("param_name = %s param_type = %s\n", subprogram->param_names[i], subprogram->param_types[i]);
+            }
+            for (int i = 0; i < subprogram->local_count; i++)
+            {
+                printf("local_var_name = %s local_var_type = %s\n", subprogram->local_names[i], subprogram->local_types[i]);
+            }
 
             // freeCFG(cfg);
         } else {
@@ -231,10 +243,11 @@ int main(int argc, char* argv[])
 
         if (result.errorCount == 0)
         {
-            ControlFlowGraph* cfg = buildCFG(result.tree);
+            SubprogramInfo* subprogram = generateSubprogramInfo(argv[1], result.tree);
 
-            if (cfg)
+            if (subprogram && subprogram->cfg)
             {
+                ControlFlowGraph* cfg = subprogram->cfg;
                 FILE* cfgDot = fopen(argv[3], "w");
                 if (!cfgDot)
                 {
@@ -248,6 +261,16 @@ int main(int argc, char* argv[])
 
                 fclose(cfgDot);
                 // freeCFG(cfg);
+
+                printf("source_file = %s\n method_name = %s\n return_type = %s\n", subprogram->source_file, subprogram->name, subprogram->return_type);
+                for (int i = 0; i < subprogram->param_count; i++)
+                {
+                    printf("param_name = %s param_type = %s\n", subprogram->param_names[i], subprogram->param_types[i]);
+                }
+                for (int i = 0; i < subprogram->local_count; i++)
+                {
+                    printf("local_var_name = %s local_var_type = %s\n", subprogram->local_names[i], subprogram->local_types[i]);
+                }
             }
         }
 
@@ -287,10 +310,6 @@ int main(int argc, char* argv[])
                 return 1;
             }
         }
-
-        printf("AST output directory: %s/\n", ast_dir);
-        printf("CFG output directory: %s/\n", cfg_dir);
-        printf("\n");
 
         // Обрабатываем все переданные файлы
         int processed_count = 0;

@@ -146,8 +146,8 @@ static const char* getIdentifierName(pANTLR3_BASE_TREE node)
 const char* opTypeToString(OpType type)
 {
     switch (type) {
-        case OP_ASSIGNMENT: return "ASSIGNMENT";
-        case OP_ADDITION: return "ADDITION";
+        case OP_ASSIGNMENT: return "ASSIGN";
+        case OP_ADDITION: return "ADD";
         case OP_SUBTRACTION: return "SUBTRACTION";
         case OP_MULTIPLICATION: return "MULTIPLICATION";
         case OP_DIVISION: return "DIVISION";
@@ -163,7 +163,7 @@ const char* opTypeToString(OpType type)
         case OP_UNARY_PLUS: return "UNARY_PLUS";
         case OP_UNARY_MINUS: return "UNARY_MINUS";
         case OP_LOGICAL_NOT: return "LOGICAL_NOT";
-        case OP_FUNCTION_CALL: return "FUNCTION_CALL";
+        case OP_FUNCTION_CALL: return "CALL";
         case OP_ARRAY_INDEX: return "ARRAY_INDEX";
         case OP_IDENTIFIER: return "IDENTIFIER";
         case OP_LITERAL: return "LITERAL";
