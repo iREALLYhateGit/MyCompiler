@@ -2,10 +2,12 @@
 #define CFG_BUILDER_MODULE_H
 
 #include <antlr3.h>
+#include <stdbool.h>
+#include <stdio.h>
 
 #include "op_tree.h"
 
-// Новые структуры для CFG
+// New structures for CFG
 typedef enum {
     NODE_BASIC_BLOCK,
     NODE_ENTRY,
@@ -17,28 +19,26 @@ typedef enum {
     NODE_RETURN
 } NodeType;
 
-
 typedef struct CFGNode {
     int id;
     NodeType type;
-    // Для basic block
+    // For basic block
     OpNode** statements;
     int stmt_count;
     struct CFGNode* nextDefault;
     struct CFGNode* nextConditional;
 } CFGNode;
 
-
-// Типы ребер CFG
+// CFG edge types
 typedef enum {
-    EDGE_CLASSIC,   // Обычное ребро потока управления
-    EDGE_TRUE,      // Ребро для true ветви условия
-    EDGE_FALSE,     // Ребро для false ветви условия
-    EDGE_BREAK,     // Ребро для break
-    EDGE_CONTINUE   // Ребро для continue (если будет)
+    EDGE_CLASSIC,
+    EDGE_TRUE,
+    EDGE_FALSE,
+    EDGE_BREAK,
+    EDGE_CONTINUE
 } EdgeType;
 
-// Структура для хранения ребра с меткой
+// Labeled CFG edge
 typedef struct CFGEdge {
     CFGNode* from;
     CFGNode* to;
@@ -62,7 +62,6 @@ typedef struct ControlFlowGraph {
     int max_edges;
 } ControlFlowGraph;
 
-
 typedef struct {
     char* name;
     char** param_names;
@@ -74,13 +73,40 @@ typedef struct {
     int local_count;
     char* source_file;
     ControlFlowGraph* cfg;
+    bool has_body;
 } SubprogramInfo;
 
-// Функции для работы с CFG
+typedef struct {
+    SubprogramInfo* items;
+    int count;
+} SubprogramCollection;
+
+typedef struct {
+    char* caller_name;
+    char* callee_name;
+} CallGraphEdge;
+
+typedef struct {
+    char** node_names;
+    int node_count;
+    CallGraphEdge* edges;
+    int edge_count;
+} CallGraph;
+
+// CFG helpers
 ControlFlowGraph* buildCFG(pANTLR3_BASE_TREE block_node);
 SubprogramInfo* generateSubprogramInfo(const char* source_file, pANTLR3_BASE_TREE tree);
+SubprogramCollection generateSubprogramInfoCollection(const char* source_file, pANTLR3_BASE_TREE tree);
 void cfgToDot(ControlFlowGraph* cfg, FILE* out);
 void cfgNodesToDot(ControlFlowGraph* cfg, FILE* out);
 void freeCFG(ControlFlowGraph* cfg);
+
+// Subprogram helpers
+void freeSubprogramCollection(SubprogramCollection* collection);
+
+// Call graph helpers
+CallGraph* buildCallGraph(const SubprogramCollection* collection);
+void callGraphToDot(const CallGraph* graph, FILE* out);
+void freeCallGraph(CallGraph* graph);
 
 #endif

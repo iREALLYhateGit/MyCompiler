@@ -1,0 +1,362 @@
+architecture MyVM {
+	registers:
+		/* Instruction Pointer: points to CODE_CONST bank (byte address) */
+		storage IP[32];
+		view ip = IP;
+
+		/* Stack Pointer: index (or byte addr) in DATA bank */
+		storage SP[32];
+		view sp = SP;
+
+		/* Frame Pointer: base for locals */
+		storage FP[32];
+		view fp = FP;
+
+		/* Hidden IO port register (IN/OUT use it) */
+		storage IOPORT[16];
+		view ioport = IOPORT;
+
+		/* Hidden IO data registers */
+		storage STDIN[32];
+		storage STDOUT[32];
+		view stdin = STDIN;
+		view stdout = STDOUT;
+
+		/* Status/flags */
+		storage FLAGS[8];
+		view ZF = FLAGS[0];
+
+
+	memory:
+		/* Bank 1: CODE + CONSTANTS (read-only) */
+		range CODE_CONST[0x000000..0xFFFFFF]{
+			cell = 8;
+			endianess = little-endian;
+			granularity = 8;
+		}
+
+		/* Bank 2: DATA (stack + globals + locals) */
+		range DATA[0x0000..0xFFFF]{
+			cell = 8;
+			endianess = little-endian;
+			granularity = 8;
+		}
+
+	/* Encodings (8-bit opcode + operands). */
+	instructions:
+		encode u8 field = immediate[8];
+		encode u16 field = immediate[16];
+		encode i16 field = immediate[16];
+		encode i32 field = immediate[32];
+		encode addr24 field = immediate[24];
+		encode bool1 field = immediate[8];
+
+		encode OPC field = cases {
+			OP_PUSHI = 00000001,
+			OP_PUSHB = 00000010,
+			OP_PUSHC = 00000011,
+			OP_LDG = 00000100,
+			OP_STG = 00000101,
+			OP_LDL = 00000110,
+			OP_STL = 00000111,
+			OP_DUP = 00001000,
+			OP_POP = 00001001,
+			OP_ADD = 00010000,
+			OP_SUB = 00010001,
+			OP_MUL = 00010010,
+			OP_DIV = 00010011,
+			OP_MOD = 00010100,
+			OP_EQ = 00011000,
+			OP_NE = 00011001,
+			OP_LT = 00011010,
+			OP_LE = 00011011,
+			OP_GT = 00011100,
+			OP_GE = 00011101,
+			OP_AND = 00100000,
+			OP_OR = 00100001,
+			OP_JMP = 00110000,
+			OP_JZ = 00110001,
+			OP_JNZ = 00110010,
+			OP_HALT = 00111111,
+			OP_SETPORT = 01000000,
+			OP_IN = 01000001,
+			OP_OUT = 01000010
+		};
+
+		encode FMT_I32 sequence = {i32 as IMM};
+		encode FMT_B1 sequence = {bool1 as IMM};
+		encode FMT_U16 sequence = {u16 as IDX};
+		encode FMT_I16 sequence = {i16 as OFF};
+		encode FMT_J24 sequence = {addr24 as T};
+		encode FMT_P16 sequence = {u16 as P};
+
+		/* PUSHI: push i32 immediate onto stack */
+		instruction PUSHI = { OPC.OP_PUSHI, sequence FMT_I32 } {
+			if (sp == 0x10000) then sp = 0;
+			DATA[sp] = IMM;
+			sp = sp + 8;
+			ip = ip + 5;
+		};
+
+		/* PUSHB: push bool immediate (0/1) */
+		instruction PUSHB = { OPC.OP_PUSHB, sequence FMT_B1 } {
+			if (sp == 0x10000) then sp = 0;
+			DATA[sp] = IMM;
+			sp = sp + 8;
+			ip = ip + 2;
+		};
+
+		/* PUSHC: push constant by index */
+		instruction PUSHC = { OPC.OP_PUSHC, sequence FMT_U16 } {
+			if (sp == 0x10000) then sp = 0;
+			DATA[sp] = CODE_CONST[IDX];
+			sp = sp + 8;
+			ip = ip + 3;
+		};
+
+		/* Globals */
+		instruction LDG = { OPC.OP_LDG, sequence FMT_U16 } {
+			if (sp == 0x10000) then sp = 0;
+			DATA[sp] = DATA[0x2000 + IDX * 8];
+			sp = sp + 8;
+			ip = ip + 3;
+		};
+		instruction STG = { OPC.OP_STG, sequence FMT_U16 } {
+			sp = sp - 8;
+			DATA[0x2000 + IDX * 8] = DATA[sp];
+			ip = ip + 3;
+		};
+
+		/* Locals relative to FP */
+		instruction LDL = { OPC.OP_LDL, sequence FMT_I16 } {
+			if (sp == 0x10000) then sp = 0;
+			DATA[sp] = DATA[fp + OFF];
+			sp = sp + 8;
+			ip = ip + 3;
+		};
+		instruction STL = { OPC.OP_STL, sequence FMT_I16 } {
+			sp = sp - 8;
+			DATA[fp + OFF] = DATA[sp];
+			ip = ip + 3;
+		};
+
+		/* Stack operations */
+		instruction DUP = { OPC.OP_DUP } {
+			DATA[sp] = DATA[sp - 8];
+			sp = sp + 8;
+			ip = ip + 1;
+		};
+		instruction POP = { OPC.OP_POP } {
+			sp = sp - 8;
+			ip = ip + 1;
+		};
+
+		/* Arithmetic */
+		instruction ADD = { OPC.OP_ADD } {
+			DATA[sp - 16] = DATA[sp - 16] + DATA[sp - 8];
+			sp = sp - 8;
+			ip = ip + 1;
+		};
+		instruction SUB = { OPC.OP_SUB } {
+			DATA[sp - 16] = DATA[sp - 16] - DATA[sp - 8];
+			sp = sp - 8;
+			ip = ip + 1;
+		};
+		instruction MUL = { OPC.OP_MUL } {
+			DATA[sp - 16] = DATA[sp - 16] * DATA[sp - 8];
+			sp = sp - 8;
+			ip = ip + 1;
+		};
+		instruction DIV = { OPC.OP_DIV } {
+			DATA[sp - 16] = DATA[sp - 16] / DATA[sp - 8];
+			sp = sp - 8;
+			ip = ip + 1;
+		};
+		instruction MOD = { OPC.OP_MOD } {
+			DATA[sp - 16] = DATA[sp - 16] % DATA[sp - 8];
+			sp = sp - 8;
+			ip = ip + 1;
+		};
+
+		/* Comparisons */
+		instruction EQ = { OPC.OP_EQ } {
+			DATA[sp - 16] = DATA[sp - 16] == DATA[sp - 8];
+			ZF = DATA[sp - 16] == 0;
+			sp = sp - 8;
+			ip = ip + 1;
+		};
+		instruction NE = { OPC.OP_NE } {
+			DATA[sp - 16] = DATA[sp - 16] != DATA[sp - 8];
+			ZF = DATA[sp - 16] == 0;
+			sp = sp - 8;
+			ip = ip + 1;
+		};
+		instruction LT = { OPC.OP_LT } {
+			DATA[sp - 16] = DATA[sp - 16] < DATA[sp - 8];
+			ZF = DATA[sp - 16] == 0;
+			sp = sp - 8;
+			ip = ip + 1;
+		};
+		instruction LE = { OPC.OP_LE } {
+			DATA[sp - 16] = DATA[sp - 16] <= DATA[sp - 8];
+			ZF = DATA[sp - 16] == 0;
+			sp = sp - 8;
+			ip = ip + 1;
+		};
+		instruction GT = { OPC.OP_GT } {
+			DATA[sp - 16] = DATA[sp - 16] > DATA[sp - 8];
+			ZF = DATA[sp - 16] == 0;
+			sp = sp - 8;
+			ip = ip + 1;
+		};
+		instruction GE = { OPC.OP_GE } {
+			DATA[sp - 16] = DATA[sp - 16] >= DATA[sp - 8];
+			ZF = DATA[sp - 16] == 0;
+			sp = sp - 8;
+			ip = ip + 1;
+		};
+
+		/* Boolean */
+		instruction AND = { OPC.OP_AND } {
+			DATA[sp - 16] = (DATA[sp - 16] != 0) && (DATA[sp - 8] != 0);
+			ZF = DATA[sp - 16] == 0;
+			sp = sp - 8;
+			ip = ip + 1;
+		};
+		instruction OR = { OPC.OP_OR } {
+			DATA[sp - 16] = (DATA[sp - 16] != 0) || (DATA[sp - 8] != 0);
+			ZF = DATA[sp - 16] == 0;
+			sp = sp - 8;
+			ip = ip + 1;
+		};
+
+		/* Jumps */
+		instruction JMP = { OPC.OP_JMP, sequence FMT_J24 } {
+			ip = T;
+		};
+		instruction JZ = { OPC.OP_JZ, sequence FMT_J24 } {
+			sp = sp - 8;
+			if (DATA[sp] == 0) then ip = T;
+			else ip = ip + 4;
+		};
+		instruction JNZ = { OPC.OP_JNZ, sequence FMT_J24 } {
+			sp = sp - 8;
+			if (DATA[sp] != 0) then ip = T;
+			else ip = ip + 4;
+		};
+
+		/* HALT */
+		instruction HALT = { OPC.OP_HALT } {
+			break;
+		};
+
+		/* IO */
+		instruction SETPORT = { OPC.OP_SETPORT, sequence FMT_P16 } {
+			ioport = P;
+			ip = ip + 3;
+		};
+		instruction IN = { OPC.OP_IN } {
+			if (sp == 0x10000) then sp = 0;
+
+			/* Read one decimal integer token from stdin. */
+			let c = stdin;
+			while (c == 32 || c == 10 || c == 13 || c == 9) do
+				c = stdin;
+
+			let sign = 1;
+			if (c == 45) then {
+				sign = 0 - 1;
+				c = stdin;
+			}
+
+			let n = 0;
+			while (c >= 48 && c <= 57) do {
+				n = n * 10 + (c - 48);
+				c = stdin;
+			}
+
+			DATA[sp] = n * sign;
+			sp = sp + 8;
+			ip = ip + 1;
+		};
+		/*
+		 * OUT prints stack top as decimal text.
+		 * Example: 65 -> bytes '6' and '5' (0x36 0x35).
+		 */
+		instruction OUT = { OPC.OP_OUT } {
+			sp = sp - 8;
+			let n = DATA[sp];
+
+			if (n == 0) then {
+				stdout = 48; /* '0' */
+			}
+			else {
+				if (n < 0) then {
+					stdout = 45; /* '-' */
+					n = 0 - n;
+				}
+
+				let p = 1;
+				while (p * 10 <= n) do
+					p = p * 10;
+
+				while (p > 0) do {
+					let d = n / p;
+					stdout = d + 48;
+					n = n % p;
+					p = p / 10;
+				}
+			}
+
+			ip = ip + 1;
+		};
+
+
+	/* (iii) MNEMONICS */
+	mnemonics:
+		format NONE is "";
+		format IMM32 is "{1}";
+		format IMM1 is "{1}";
+		format IDX16 is "{1}";
+		format OFF16 is "{1}";
+		format T24 is "{1}";
+		format P16 is "{1}";
+
+		mnemonic pushi for PUSHI (IMM) IMM32;
+		mnemonic pushb for PUSHB (IMM) IMM1;
+		mnemonic pushc for PUSHC (IDX) IDX16;
+
+		mnemonic ldg for LDG (IDX) IDX16;
+		mnemonic stg for STG (IDX) IDX16;
+
+		mnemonic ldl for LDL (OFF) OFF16;
+		mnemonic stl for STL (OFF) OFF16;
+
+		mnemonic dup for DUP () NONE;
+		mnemonic pop for POP () NONE;
+
+		mnemonic add for ADD () NONE;
+		mnemonic sub for SUB () NONE;
+		mnemonic mul for MUL () NONE;
+		mnemonic div for DIV () NONE;
+		mnemonic mod for MOD () NONE;
+
+		mnemonic eq for EQ () NONE;
+		mnemonic ne for NE () NONE;
+		mnemonic lt for LT () NONE;
+		mnemonic le for LE () NONE;
+		mnemonic gt for GT () NONE;
+		mnemonic ge for GE () NONE;
+
+		mnemonic and_ for AND () NONE;
+		mnemonic or_ for OR () NONE;
+
+		mnemonic jmp for JMP (T) T24;
+		mnemonic jz for JZ (T) T24;
+		mnemonic jnz for JNZ (T) T24;
+		mnemonic halt for HALT () NONE;
+
+		mnemonic setport for SETPORT (P) P16;
+		mnemonic in for IN () NONE;
+		mnemonic out for OUT () NONE;
+}

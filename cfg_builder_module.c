@@ -8,6 +8,7 @@
 static void fprintEscaped(FILE *out, const char *s);
 const char* nodeTypeToString(NodeType type);
 const char* edgeTypeToString(EdgeType type);
+static ControlFlowGraph* buildEmptyCFG(void);
 
 void cfgToDot(ControlFlowGraph* cfg, FILE* out)
 {
@@ -147,7 +148,36 @@ static CFGEdge* createCFGEdge(CFGNode* from, CFGNode* to, EdgeType type)
 // Простая версия для обычных ребер
 static void addEdge(ControlFlowGraph* cfg, CFGEdge* edge)
 {
+    if (cfg->edge_count + 1 > cfg->max_edges) {
+        int new_capacity = cfg->max_edges == 0 ? 16 : cfg->max_edges * 2;
+        CFGEdge** new_edges = realloc(cfg->edges, sizeof(CFGEdge*) * new_capacity);
+        if (!new_edges) {
+            return;
+        }
+        cfg->edges = new_edges;
+        cfg->max_edges = new_capacity;
+    }
+
     cfg->edges[cfg->edge_count++] = edge;
+}
+
+static void addNode(ControlFlowGraph* cfg, CFGNode* node)
+{
+    if (!cfg || !node) {
+        return;
+    }
+
+    if (cfg->node_count + 1 > cfg->max_nodes) {
+        int new_capacity = cfg->max_nodes == 0 ? 16 : cfg->max_nodes * 2;
+        CFGNode** new_nodes = realloc(cfg->nodes, sizeof(CFGNode*) * new_capacity);
+        if (!new_nodes) {
+            return;
+        }
+        cfg->nodes = new_nodes;
+        cfg->max_nodes = new_capacity;
+    }
+
+    cfg->nodes[cfg->node_count++] = node;
 }
 
 
@@ -170,11 +200,18 @@ static FlowResult processBreakStatement(pANTLR3_BASE_TREE break_node,
 
 
 // Вспомогательная функция для получения текста узла
-static char* get_ast_node_text(pANTLR3_BASE_TREE node)
+static const char* get_ast_node_text(pANTLR3_BASE_TREE node)
 {
-    if (!node) return strdup("");
+    if (!node) {
+        return "";
+    }
+
     pANTLR3_STRING text = node->getText(node);
-    return strdup((char*)text->chars);
+    if (!text || !text->chars) {
+        return "";
+    }
+
+    return (const char*)text->chars;
 }
 
 typedef struct {
@@ -305,6 +342,7 @@ static void initSubprogramInfo(SubprogramInfo* info)
     info->local_count = 0;
     info->source_file = NULL;
     info->cfg = NULL;
+    info->has_body = false;
 }
 
 static void fillSubprogramInfo(SubprogramInfo* info, pANTLR3_BASE_TREE method_node)
@@ -346,6 +384,7 @@ static void fillSubprogramInfo(SubprogramInfo* info, pANTLR3_BASE_TREE method_no
     pANTLR3_BASE_TREE body_node = findChildByText(method_node, "BODY");
     if (body_node)
     {
+        info->has_body = true;
         pANTLR3_BASE_TREE var_declarations_node = findChildByText(body_node, "VAR_DECLARATIONS");
         if (var_declarations_node && var_declarations_node->getChildCount(var_declarations_node) > 0)
         {
@@ -386,10 +425,13 @@ static void fillSubprogramInfo(SubprogramInfo* info, pANTLR3_BASE_TREE method_no
         }
 
         pANTLR3_BASE_TREE block_node = findChildByText(body_node, "BLOCK");
-        if (block_node && block_node->getChildCount(block_node) > 0)
-        {
+        if (block_node) {
             info->cfg = buildCFG(block_node);
+        } else {
+            info->cfg = buildEmptyCFG();
         }
+    } else {
+        info->cfg = buildEmptyCFG();
     }
 
 }
@@ -530,7 +572,7 @@ static FlowResult processStatement(pANTLR3_BASE_TREE node,
         {
             continue_current_block = false;
             current_block = createCFGNode(NODE_BASIC_BLOCK);
-            cfg->nodes[cfg->node_count++] = current_block;
+            addNode(cfg, current_block);
 
             for (int i = 0; i < flow_result.exit_count; i++)
             {
@@ -590,7 +632,7 @@ static FlowResult processIfStatement(pANTLR3_BASE_TREE if_node,
 {
     CFGNode* if_block = createCFGNode(NODE_IF);
     // Добавляем узел в граф
-    cfg->nodes[cfg->node_count++] = if_block;
+    addNode(cfg, if_block);
 
     for (int i = 0; i < flow_entries.exit_count; i++)
     {
@@ -690,7 +732,7 @@ static FlowResult processWhileStatement(pANTLR3_BASE_TREE while_node,
     // Создаем узлы для if
     CFGNode* while_block = createCFGNode(NODE_WHILE);
     // Добавляем узел в граф
-    cfg->nodes[cfg->node_count++] = while_block;
+    addNode(cfg, while_block);
 
     for (int i = 0; i < flow_entries.exit_count; i++)
     {
@@ -775,7 +817,7 @@ static FlowResult processRepeatStatement(pANTLR3_BASE_TREE repeat_node,
     // Создаем узлы для if
     CFGNode* repeatable_part_block = createCFGNode(NODE_BASIC_BLOCK);
     // Добавляем узел в граф
-    cfg->nodes[cfg->node_count++] = repeatable_part_block;
+    addNode(cfg, repeatable_part_block);
 
     for (int i = 0; i < flow_entries.exit_count; i++)
     {
@@ -829,7 +871,7 @@ static FlowResult processRepeatStatement(pANTLR3_BASE_TREE repeat_node,
             // Обработка блока statements
 
             CFGNode* until_block = createCFGNode(NODE_REPEAT_CONDITION);
-            cfg->nodes[cfg->node_count++] = until_block;
+            addNode(cfg, until_block);
 
             until_block->statements = realloc(until_block->statements,
                                                (until_block->stmt_count + 1) *
@@ -901,44 +943,64 @@ static FlowResult processBreakStatement(pANTLR3_BASE_TREE break_node,
     // return flow_exits;
 }
 
-static pANTLR3_BASE_TREE skipUselessTokens(pANTLR3_BASE_TREE tree)
+
+static void collectMethodDeclarations(pANTLR3_BASE_TREE tree,
+                                      pANTLR3_BASE_TREE** methods,
+                                      int* method_count,
+                                      int* method_capacity)
 {
-    if (strcmp(get_ast_node_text(tree), "BLOCK") == 0)
-    {
-        return tree;
+    if (!tree || !methods || !method_count || !method_capacity) {
+        return;
+    }
+
+    if (strcmp(get_ast_node_text(tree), "METHOD_DECL") == 0) {
+        if (*method_count + 1 > *method_capacity) {
+            int new_capacity = *method_capacity == 0 ? 8 : (*method_capacity * 2);
+            pANTLR3_BASE_TREE* new_items = realloc(*methods, sizeof(pANTLR3_BASE_TREE) * new_capacity);
+            if (!new_items) {
+                return;
+            }
+
+            *methods = new_items;
+            *method_capacity = new_capacity;
+        }
+
+        (*methods)[(*method_count)++] = tree;
     }
 
     ANTLR3_UINT32 count = tree->getChildCount(tree);
-    for (ANTLR3_UINT32 i = 0; i < count; i++)
-    {
-        pANTLR3_BASE_TREE result = skipUselessTokens(tree->getChild(tree, i));
-
-        if (result != NULL)
-        {
-            return result;
-        }
+    for (ANTLR3_UINT32 i = 0; i < count; i++) {
+        collectMethodDeclarations(tree->getChild(tree, i), methods, method_count, method_capacity);
     }
-
-    return NULL;
 }
 
-static pANTLR3_BASE_TREE findMethodDeclaration(pANTLR3_BASE_TREE tree)
+static ControlFlowGraph* buildEmptyCFG(void)
 {
-    if (strcmp(get_ast_node_text(tree), "METHOD_DECL") == 0)
-    {
-        return tree;
+    ControlFlowGraph* cfg = malloc(sizeof(ControlFlowGraph));
+    if (!cfg) {
+        return NULL;
     }
 
-    for (ANTLR3_UINT32 i = 0; i < tree->getChildCount(tree); i++)
-    {
-        return  findMethodDeclaration(tree->getChild(tree, i));
-    }
+    cfg->max_nodes = 4;
+    cfg->nodes = malloc(cfg->max_nodes * sizeof(CFGNode*));
+    cfg->node_count = 0;
 
-    return NULL;
+    cfg->max_edges = 4;
+    cfg->edges = malloc(cfg->max_edges * sizeof(CFGEdge*));
+    cfg->edge_count = 0;
+
+    cfg->entry = createCFGNode(NODE_ENTRY);
+    cfg->exit = createCFGNode(NODE_EXIT);
+
+    addNode(cfg, cfg->entry);
+    addNode(cfg, cfg->exit);
+
+    CFGEdge* edge = createCFGEdge(cfg->entry, cfg->exit, EDGE_CLASSIC);
+    addEdge(cfg, edge);
+    cfg->entry->nextDefault = cfg->exit;
+
+    return cfg;
 }
-
-
-
 
 ControlFlowGraph* buildCFG(pANTLR3_BASE_TREE blockNode)
 {
@@ -954,7 +1016,7 @@ ControlFlowGraph* buildCFG(pANTLR3_BASE_TREE blockNode)
 
     // Создаем entry узел
     cfg->entry = createCFGNode(NODE_ENTRY);
-    cfg->nodes[cfg->node_count++] = cfg->entry;
+    addNode(cfg, cfg->entry);
 
 
     CFGEdge* entryEdge = createCFGEdge(cfg->entry, NULL, EDGE_CLASSIC);
@@ -970,7 +1032,7 @@ ControlFlowGraph* buildCFG(pANTLR3_BASE_TREE blockNode)
     FlowResult result_flow = processStatement(blockNode, cfg, entry_block_flow);
 
     cfg->exit = createCFGNode(NODE_EXIT);
-    cfg->nodes[cfg->node_count++] = cfg->exit;
+    addNode(cfg, cfg->exit);
 
     for (int i = 0; i < result_flow.exit_count; i++)
     {
@@ -985,34 +1047,319 @@ ControlFlowGraph* buildCFG(pANTLR3_BASE_TREE blockNode)
         else
             exit_node->nextDefault = cfg->exit;
     }
-    // else
-    // {
-    //     entryEdge->to = cfg->exit;
-    //     addEdge(cfg, entryEdge);
-    //
-    //     cfg->entry->nextDefault = cfg->exit;
-    // }
+
+    free(result_flow.exits);
+    free(result_flow.exitsEdges);
 
     return cfg;
 }
 
-SubprogramInfo* generateSubprogramInfo(const char* source_file, pANTLR3_BASE_TREE tree)
+SubprogramCollection generateSubprogramInfoCollection(const char* source_file, pANTLR3_BASE_TREE tree)
 {
-    SubprogramInfo* info = malloc(sizeof(SubprogramInfo));
-    initSubprogramInfo(info);
+    SubprogramCollection collection;
+    collection.items = NULL;
+    collection.count = 0;
 
-    info->source_file = strdup(source_file);
-
-    pANTLR3_BASE_TREE methodNode = findMethodDeclaration(tree);
-
-    if (methodNode)
-    {
-        fillSubprogramInfo(info, methodNode);
+    if (!source_file || !tree) {
+        return collection;
     }
 
-    else {
+    pANTLR3_BASE_TREE* methods = NULL;
+    int method_count = 0;
+    int method_capacity = 0;
+    collectMethodDeclarations(tree, &methods, &method_count, &method_capacity);
+
+    if (method_count <= 0) {
+        free(methods);
+        return collection;
+    }
+
+    collection.items = calloc(method_count, sizeof(SubprogramInfo));
+    if (!collection.items) {
+        free(methods);
+        return collection;
+    }
+
+    collection.count = method_count;
+
+    for (int i = 0; i < method_count; i++) {
+        SubprogramInfo* info = &collection.items[i];
+        initSubprogramInfo(info);
+
+        info->source_file = strdup(source_file);
+        fillSubprogramInfo(info, methods[i]);
+        if (!info->cfg) {
+            info->cfg = buildEmptyCFG();
+        }
+    }
+
+    free(methods);
+
+    return collection;
+}
+
+SubprogramInfo* generateSubprogramInfo(const char* source_file, pANTLR3_BASE_TREE tree)
+{
+    SubprogramCollection collection = generateSubprogramInfoCollection(source_file, tree);
+    if (collection.count <= 0 || !collection.items) {
         return NULL;
     }
 
+    SubprogramInfo* info = malloc(sizeof(SubprogramInfo));
+    if (!info) {
+        freeSubprogramCollection(&collection);
+        return NULL;
+    }
+
+    *info = collection.items[0];
+    for (int i = 1; i < collection.count; i++) {
+        SubprogramInfo* dropped = &collection.items[i];
+
+        free(dropped->name);
+        for (int p = 0; p < dropped->param_count; p++) {
+            free(dropped->param_names ? dropped->param_names[p] : NULL);
+            free(dropped->param_types ? dropped->param_types[p] : NULL);
+        }
+        free(dropped->param_names);
+        free(dropped->param_types);
+
+        free(dropped->return_type);
+
+        for (int l = 0; l < dropped->local_count; l++) {
+            free(dropped->local_names ? dropped->local_names[l] : NULL);
+            free(dropped->local_types ? dropped->local_types[l] : NULL);
+        }
+        free(dropped->local_names);
+        free(dropped->local_types);
+
+        free(dropped->source_file);
+        freeCFG(dropped->cfg);
+    }
+
+    free(collection.items);
+
     return info;
+}
+
+void freeCFG(ControlFlowGraph* cfg)
+{
+    if (!cfg) {
+        return;
+    }
+
+    for (int i = 0; i < cfg->node_count; i++) {
+        CFGNode* node = cfg->nodes ? cfg->nodes[i] : NULL;
+        if (!node) {
+            continue;
+        }
+
+        for (int s = 0; s < node->stmt_count; s++) {
+            freeOpTree(node->statements ? node->statements[s] : NULL);
+        }
+        free(node->statements);
+        free(node);
+    }
+
+    for (int i = 0; i < cfg->edge_count; i++) {
+        free(cfg->edges ? cfg->edges[i] : NULL);
+    }
+
+    free(cfg->nodes);
+    free(cfg->edges);
+    free(cfg);
+}
+
+static void freeSubprogramInfo(SubprogramInfo* info)
+{
+    if (!info) {
+        return;
+    }
+
+    free(info->name);
+
+    for (int i = 0; i < info->param_count; i++) {
+        free(info->param_names ? info->param_names[i] : NULL);
+        free(info->param_types ? info->param_types[i] : NULL);
+    }
+    free(info->param_names);
+    free(info->param_types);
+
+    free(info->return_type);
+
+    for (int i = 0; i < info->local_count; i++) {
+        free(info->local_names ? info->local_names[i] : NULL);
+        free(info->local_types ? info->local_types[i] : NULL);
+    }
+    free(info->local_names);
+    free(info->local_types);
+
+    free(info->source_file);
+    freeCFG(info->cfg);
+
+    initSubprogramInfo(info);
+}
+
+void freeSubprogramCollection(SubprogramCollection* collection)
+{
+    if (!collection) {
+        return;
+    }
+
+    for (int i = 0; i < collection->count; i++) {
+        freeSubprogramInfo(&collection->items[i]);
+    }
+
+    free(collection->items);
+    collection->items = NULL;
+    collection->count = 0;
+}
+
+static void call_graph_add_node(CallGraph* graph, const char* node_name)
+{
+    if (!graph || !node_name || node_name[0] == '\0') {
+        return;
+    }
+
+    for (int i = 0; i < graph->node_count; i++) {
+        if (strcmp(graph->node_names[i], node_name) == 0) {
+            return;
+        }
+    }
+
+    char** new_nodes = realloc(graph->node_names, sizeof(char*) * (graph->node_count + 1));
+    if (!new_nodes) {
+        return;
+    }
+
+    graph->node_names = new_nodes;
+    graph->node_names[graph->node_count++] = strdup(node_name);
+}
+
+static void call_graph_add_edge(CallGraph* graph, const char* caller, const char* callee)
+{
+    if (!graph || !caller || !callee || caller[0] == '\0' || callee[0] == '\0') {
+        return;
+    }
+
+    for (int i = 0; i < graph->edge_count; i++) {
+        if (strcmp(graph->edges[i].caller_name, caller) == 0
+            && strcmp(graph->edges[i].callee_name, callee) == 0) {
+            return;
+        }
+    }
+
+    CallGraphEdge* new_edges = realloc(graph->edges, sizeof(CallGraphEdge) * (graph->edge_count + 1));
+    if (!new_edges) {
+        return;
+    }
+
+    graph->edges = new_edges;
+    graph->edges[graph->edge_count].caller_name = strdup(caller);
+    graph->edges[graph->edge_count].callee_name = strdup(callee);
+    graph->edge_count++;
+
+    call_graph_add_node(graph, caller);
+    call_graph_add_node(graph, callee);
+}
+
+static void collect_calls_from_op_tree(CallGraph* graph, const char* caller_name, const OpNode* node)
+{
+    if (!graph || !caller_name || !node) {
+        return;
+    }
+
+    if (node->type == OP_FUNCTION_CALL && node->text) {
+        call_graph_add_edge(graph, caller_name, node->text);
+    }
+
+    for (int i = 0; i < node->operand_count; i++) {
+        collect_calls_from_op_tree(graph, caller_name, node->operands[i]);
+    }
+}
+
+CallGraph* buildCallGraph(const SubprogramCollection* collection)
+{
+    if (!collection) {
+        return NULL;
+    }
+
+    CallGraph* graph = calloc(1, sizeof(CallGraph));
+    if (!graph) {
+        return NULL;
+    }
+
+    for (int i = 0; i < collection->count; i++) {
+        const SubprogramInfo* info = &collection->items[i];
+        if (!info || !info->name) {
+            continue;
+        }
+
+        call_graph_add_node(graph, info->name);
+        if (!info->cfg) {
+            continue;
+        }
+
+        for (int node_index = 0; node_index < info->cfg->node_count; node_index++) {
+            CFGNode* cfg_node = info->cfg->nodes[node_index];
+            if (!cfg_node) {
+                continue;
+            }
+
+            for (int stmt_index = 0; stmt_index < cfg_node->stmt_count; stmt_index++) {
+                collect_calls_from_op_tree(graph, info->name, cfg_node->statements[stmt_index]);
+            }
+        }
+    }
+
+    return graph;
+}
+
+void callGraphToDot(const CallGraph* graph, FILE* out)
+{
+    if (!graph || !out) {
+        return;
+    }
+
+    fprintf(out, "digraph CallGraph {\n");
+    fprintf(out, "  node [shape=box];\n\n");
+
+    for (int i = 0; i < graph->node_count; i++) {
+        fprintf(out, "  \"");
+        fprintEscaped(out, graph->node_names[i]);
+        fprintf(out, "\";\n");
+    }
+
+    if (graph->node_count > 0) {
+        fprintf(out, "\n");
+    }
+
+    for (int i = 0; i < graph->edge_count; i++) {
+        fprintf(out, "  \"");
+        fprintEscaped(out, graph->edges[i].caller_name);
+        fprintf(out, "\" -> \"");
+        fprintEscaped(out, graph->edges[i].callee_name);
+        fprintf(out, "\";\n");
+    }
+
+    fprintf(out, "}\n");
+}
+
+void freeCallGraph(CallGraph* graph)
+{
+    if (!graph) {
+        return;
+    }
+
+    for (int i = 0; i < graph->node_count; i++) {
+        free(graph->node_names ? graph->node_names[i] : NULL);
+    }
+    free(graph->node_names);
+
+    for (int i = 0; i < graph->edge_count; i++) {
+        free(graph->edges ? graph->edges[i].caller_name : NULL);
+        free(graph->edges ? graph->edges[i].callee_name : NULL);
+    }
+    free(graph->edges);
+
+    free(graph);
 }

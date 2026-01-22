@@ -1,0 +1,38 @@
+method calc(x : int, op : char, y : int)
+var result : int;
+begin
+    if op == '+' then result := x + y;
+    if op == '-' then result := x - y;
+    if op == '*' then result := x * y;
+    if op == '/' then result := x / y;
+    write(result);
+end;
+
+method fib(n : int) : int
+var result : int;
+begin
+    if n <= 2 then
+        result := 1;
+    else
+        result := fib(n - 2) + fib(n - 1);
+
+    result;
+end;
+
+method main()
+var x, y : int;
+op : char;
+begin
+    x := read();
+    op := read();
+    if op == 'f' then
+        write(fib(x));
+    else begin
+        y := read();
+        calc(x, op, y);
+    end;
+end;
+
+
+method read();
+method write(num : int);
