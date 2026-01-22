@@ -1,0 +1,29 @@
+method fib(counter : int)
+var previous, current, result : int;
+begin
+    previous := 0;
+    current := 1;
+    if counter <= 0 then result := -1;
+    if counter == 1 then result := 0;
+    if counter == 2 then result := 1;
+    counter := counter - 2;
+    while counter > 0
+        do
+            begin
+                result := previous + current;
+                previous := current;
+                current := result;
+                counter := counter - 1;
+            end;
+    write(result);
+end;
+
+method main()
+var counter : int;
+begin
+    counter := read();
+    fib(counter);
+end;
+
+method read();
+method write(num : int);

@@ -1,0 +1,8 @@
+method hello(x, y : int) : bool
+var result, temp: int;
+begin
+    temp := 2;
+    result := temp + 10;
+    if result == 12 then result := 45;
+    temp := 4;
+end;

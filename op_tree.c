@@ -105,6 +105,63 @@ static void addOperand(OpNode* node, OpNode* operand)
     node->operands[node->operand_count++] = operand;
 }
 
+static bool isSameAssociativeGroup(OpType left, OpType right)
+{
+    if (left == OP_ADDITION || left == OP_SUBTRACTION) {
+        return right == OP_ADDITION || right == OP_SUBTRACTION;
+    }
+
+    if (left == OP_MULTIPLICATION || left == OP_DIVISION || left == OP_MODULO) {
+        return right == OP_MULTIPLICATION || right == OP_DIVISION || right == OP_MODULO;
+    }
+
+    if (left == OP_LOGICAL_AND) {
+        return right == OP_LOGICAL_AND;
+    }
+
+    if (left == OP_LOGICAL_OR) {
+        return right == OP_LOGICAL_OR;
+    }
+
+    if (left == OP_EQUAL || left == OP_NOT_EQUAL) {
+        return right == OP_EQUAL || right == OP_NOT_EQUAL;
+    }
+
+    if (left == OP_LESS_THAN || left == OP_LESS_THAN_OR_EQUAL
+        || left == OP_GREATER_THAN || left == OP_GREATER_THAN_OR_EQUAL) {
+        return right == OP_LESS_THAN || right == OP_LESS_THAN_OR_EQUAL
+            || right == OP_GREATER_THAN || right == OP_GREATER_THAN_OR_EQUAL;
+    }
+
+    return false;
+}
+
+static OpNode* leftAssociateBinary(OpNode* node)
+{
+    if (!node || node->operand_count != 2) {
+        return node;
+    }
+
+    OpNode* current = node;
+    while (current && current->operand_count == 2) {
+        OpNode* right = current->operands[1];
+        if (!right || right->operand_count != 2) {
+            break;
+        }
+
+        if (!isSameAssociativeGroup(current->type, right->type)) {
+            break;
+        }
+
+        OpNode* middle = right->operands[0];
+        right->operands[0] = current;
+        current->operands[1] = middle;
+        current = right;
+    }
+
+    return current;
+}
+
 static bool isWrapperToken(const char* text)
 {
     return strcmp(text, "EXPRESSION") == 0
@@ -276,45 +333,45 @@ OpNode* buildOpTree(pANTLR3_BASE_TREE node)
     }
 
     if (strcmp(text, "ADD") == 0) {
-        return buildOpNodeWithChildren(OP_ADDITION, node);
+        return leftAssociateBinary(buildOpNodeWithChildren(OP_ADDITION, node));
     }
     if (strcmp(text, "SUBTRACT") == 0) {
-        return buildOpNodeWithChildren(OP_SUBTRACTION, node);
+        return leftAssociateBinary(buildOpNodeWithChildren(OP_SUBTRACTION, node));
     }
     if (strcmp(text, "MULTIPLY") == 0) {
-        return buildOpNodeWithChildren(OP_MULTIPLICATION, node);
+        return leftAssociateBinary(buildOpNodeWithChildren(OP_MULTIPLICATION, node));
     }
     if (strcmp(text, "DIVISION") == 0) {
-        return buildOpNodeWithChildren(OP_DIVISION, node);
+        return leftAssociateBinary(buildOpNodeWithChildren(OP_DIVISION, node));
     }
     if (strcmp(text, "RESIDUE") == 0) {
-        return buildOpNodeWithChildren(OP_MODULO, node);
+        return leftAssociateBinary(buildOpNodeWithChildren(OP_MODULO, node));
     }
 
     if (strcmp(text, "AND") == 0) {
-        return buildOpNodeWithChildren(OP_LOGICAL_AND, node);
+        return leftAssociateBinary(buildOpNodeWithChildren(OP_LOGICAL_AND, node));
     }
     if (strcmp(text, "OR") == 0) {
-        return buildOpNodeWithChildren(OP_LOGICAL_OR, node);
+        return leftAssociateBinary(buildOpNodeWithChildren(OP_LOGICAL_OR, node));
     }
 
     if (strcmp(text, "EQUALS") == 0) {
-        return buildOpNodeWithChildren(OP_EQUAL, node);
+        return leftAssociateBinary(buildOpNodeWithChildren(OP_EQUAL, node));
     }
     if (strcmp(text, "NOT_EQUALS") == 0) {
-        return buildOpNodeWithChildren(OP_NOT_EQUAL, node);
+        return leftAssociateBinary(buildOpNodeWithChildren(OP_NOT_EQUAL, node));
     }
     if (strcmp(text, "LESS_THAN") == 0) {
-        return buildOpNodeWithChildren(OP_LESS_THAN, node);
+        return leftAssociateBinary(buildOpNodeWithChildren(OP_LESS_THAN, node));
     }
     if (strcmp(text, "LESS_THAN_OR_EQUALS") == 0) {
-        return buildOpNodeWithChildren(OP_LESS_THAN_OR_EQUAL, node);
+        return leftAssociateBinary(buildOpNodeWithChildren(OP_LESS_THAN_OR_EQUAL, node));
     }
     if (strcmp(text, "MORE_THAN") == 0) {
-        return buildOpNodeWithChildren(OP_GREATER_THAN, node);
+        return leftAssociateBinary(buildOpNodeWithChildren(OP_GREATER_THAN, node));
     }
     if (strcmp(text, "MORE_THAN_OR_EQUALS") == 0) {
-        return buildOpNodeWithChildren(OP_GREATER_THAN_OR_EQUAL, node);
+        return leftAssociateBinary(buildOpNodeWithChildren(OP_GREATER_THAN_OR_EQUAL, node));
     }
 
     if (strcmp(text, "UNARY_OPERATION") == 0) {
