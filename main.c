@@ -5,6 +5,7 @@
 
 #include "parser_module.h"
 #include "cfg_builder_module.h"
+#include "to_asm_module.h"
 #define PATH_SEPARATOR '\\'
 
 
@@ -121,6 +122,9 @@ int process_file(const char* input_file_path, const char* ast_dir, const char* c
         fclose(cfg_file);
 
         printf("CFG saved to: %s\n", cfg_path);
+
+        SubprogramImage* image = toAsmModule(subprogram);
+        printSubprogramImageConsole(image);
 
         printf("source_file = %s\n method_name = %s\n return_type = %s\n", subprogram->source_file, subprogram->name, subprogram->return_type);
         for (int i = 0; i < subprogram->param_count; i++)

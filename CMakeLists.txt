@@ -14,6 +14,7 @@ add_executable(MyCompiler
         parser_module.c
         op_tree.c
         ${ANTLR3C_SOURCES}
-        cfg_builder_module.c)
+        cfg_builder_module.c
+        to_asm_module.c)
 
 target_link_libraries(MyCompiler ws2_32)
