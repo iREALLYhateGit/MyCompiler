@@ -1,6 +1,7 @@
 #include "to_asm_module.h"
 
 #include <ctype.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -157,6 +158,67 @@ static bool equals_ignore_case(const char* a, const char* b)
     }
 
     return *a == '\0' && *b == '\0';
+}
+
+static bool parse_index_operand(const char* text, int* out_value)
+{
+    if (!text || !out_value) {
+        return false;
+    }
+
+    char* endptr = NULL;
+    long value = strtol(text, &endptr, 10);
+    if (!endptr || *endptr != '\0') {
+        return false;
+    }
+
+    if (value < 0 || value > INT_MAX) {
+        return false;
+    }
+
+    *out_value = (int)value;
+    return true;
+}
+
+static bool is_jump_mnemonic(const char* mnemonic)
+{
+    return equals_ignore_case(mnemonic, "jmp")
+        || equals_ignore_case(mnemonic, "jz")
+        || equals_ignore_case(mnemonic, "jnz");
+}
+
+static char* sanitize_label(const char* name)
+{
+    const char* raw = (name && name[0]) ? name : "entry";
+    size_t len = strlen(raw);
+    size_t extra = 0;
+
+    if (!isalpha((unsigned char)raw[0])) {
+        extra = 2;
+    }
+
+    char* label = malloc(len + extra + 1);
+    if (!label) {
+        return strdup("entry");
+    }
+
+    size_t pos = 0;
+    if (extra) {
+        label[pos++] = 'M';
+        label[pos++] = '_';
+    }
+
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)raw[i];
+        if (isalnum(c) || c == '_') {
+            label[pos++] = (char)c;
+        } else {
+            label[pos++] = '_';
+        }
+    }
+
+    label[pos] = '\0';
+    return label;
 }
 
 static int type_size_bytes(const char* type)
@@ -554,7 +616,7 @@ static void emit_node(CodegenContext* ctx, CFGNode* node, JumpPatchList* patches
     }
 }
 
-void printSubprogramImage(const SubprogramImage* image, FILE* out)
+void printSubprogramImage(const SubprogramImage* image, const char* entry_label, FILE* out)
 {
     if (!out) {
         out = stdout;
@@ -565,32 +627,118 @@ void printSubprogramImage(const SubprogramImage* image, FILE* out)
         return;
     }
 
-    fprintf(out, "Data items (%d):\n", image->data_item_count);
-    for (int i = 0; i < image->data_item_count; i++) {
-        const DataItem* item = &image->data_items[i];
-        if (item->kind == DATA_ITEM_LITERAL) {
-            fprintf(out, "  [%d] literal %s\n", i, item->value.literal_name ? item->value.literal_name : "");
-        } else if (item->kind == DATA_ITEM_TYPE_SIZE) {
-            fprintf(out, "  [%d] size %d\n", i, item->value.size_bytes);
-        } else {
-            fprintf(out, "  [%d] <unknown>\n", i);
+    int count = image->instruction_count;
+    char* entry = sanitize_label(entry_label);
+    if (count <= 0) {
+        fprintf(out, "%s:\n", entry);
+        free(entry);
+        return;
+    }
+
+    bool* skip_jump = calloc(count, sizeof(bool));
+    bool* label_needed = calloc(count, sizeof(bool));
+    char** label_names = calloc(count, sizeof(char*));
+
+    if (!skip_jump || !label_needed || !label_names) {
+        fprintf(out, "%s:\n", entry);
+        for (int i = 0; i < count; i++) {
+            const Instruction* instr = &image->instructions[i];
+            fprintf(out, "    %s", instr->mnemonic ? instr->mnemonic : "");
+            for (int op = 0; op < instr->operand_count; op++) {
+                fprintf(out, " %s", instr->operands[op] ? instr->operands[op] : "");
+            }
+            fprintf(out, "\n");
+        }
+        free(skip_jump);
+        free(label_needed);
+        free(label_names);
+        free(entry);
+        return;
+    }
+
+    for (int i = 0; i < count; i++) {
+        const Instruction* instr = &image->instructions[i];
+        if (!instr || !equals_ignore_case(instr->mnemonic, "jmp") || instr->operand_count != 1) {
+            continue;
+        }
+
+        int target = 0;
+        if (parse_index_operand(instr->operands[0], &target) && target == i + 1) {
+            skip_jump[i] = true;
         }
     }
 
-    fprintf(out, "Instructions (%d):\n", image->instruction_count);
-    for (int i = 0; i < image->instruction_count; i++) {
+    for (int i = 0; i < count; i++) {
         const Instruction* instr = &image->instructions[i];
-        fprintf(out, "  %04d: %s", i, instr->mnemonic ? instr->mnemonic : "");
+        if (!instr || skip_jump[i]) {
+            continue;
+        }
+
+        if (is_jump_mnemonic(instr->mnemonic) && instr->operand_count > 0) {
+            int target = 0;
+            if (parse_index_operand(instr->operands[0], &target) && target >= 0 && target < count) {
+                label_needed[target] = true;
+            }
+        }
+    }
+
+    label_names[0] = entry;
+    int label_index = 1;
+    for (int i = 0; i < count; i++) {
+        if (!label_needed[i]) {
+            continue;
+        }
+
+        if (i == 0) {
+            continue;
+        }
+
+        if (!label_names[i]) {
+            char buffer[32];
+            snprintf(buffer, sizeof(buffer), "L%d", label_index++);
+            label_names[i] = strdup(buffer);
+        }
+    }
+
+    fprintf(out, "%s:\n", entry);
+    for (int i = 0; i < count; i++) {
+        if (i != 0 && label_names[i]) {
+            fprintf(out, "%s:\n", label_names[i]);
+        }
+
+        if (skip_jump[i]) {
+            continue;
+        }
+
+        const Instruction* instr = &image->instructions[i];
+        fprintf(out, "    %s", instr->mnemonic ? instr->mnemonic : "");
         for (int op = 0; op < instr->operand_count; op++) {
-            fprintf(out, " %s", instr->operands[op] ? instr->operands[op] : "");
+            const char* operand = instr->operands[op] ? instr->operands[op] : "";
+            if (op == 0 && is_jump_mnemonic(instr->mnemonic)) {
+                int target = 0;
+                if (parse_index_operand(operand, &target) && target >= 0 && target < count && label_names[target]) {
+                    operand = label_names[target];
+                }
+            }
+            fprintf(out, " %s", operand);
         }
         fprintf(out, "\n");
     }
+
+    for (int i = 0; i < count; i++) {
+        if (label_names[i]) {
+            free(label_names[i]);
+        }
+    }
+
+    free(skip_jump);
+    free(label_needed);
+    free(label_names);
 }
 
-void printSubprogramImageConsole(const SubprogramImage* image)
+void printSubprogramImageConsole(const SubprogramImage* image, const char* entry_label)
 {
-    printSubprogramImage(image, stdout);
+    printSubprogramImage(image, entry_label, stdout);
 }
 
 SubprogramImage* toAsmModule(const SubprogramInfo* info)

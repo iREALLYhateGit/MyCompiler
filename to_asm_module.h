@@ -30,7 +30,7 @@ typedef struct {
 } SubprogramImage;
 
 SubprogramImage* toAsmModule(const SubprogramInfo* info);
-void printSubprogramImage(const SubprogramImage* image, FILE* out);
-void printSubprogramImageConsole(const SubprogramImage* image);
+void printSubprogramImage(const SubprogramImage* image, const char* entry_label, FILE* out);
+void printSubprogramImageConsole(const SubprogramImage* image, const char* entry_label);
 
 #endif
