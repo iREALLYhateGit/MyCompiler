@@ -345,6 +345,35 @@ static bool emit_binary_left_fold(CodegenContext* ctx, const OpNode* node, const
     return true;
 }
 
+static void emit_param_inputs(CodegenContext* ctx)
+{
+    if (!ctx || !ctx->info || ctx->info->param_count <= 0) {
+        return;
+    }
+
+    for (int i = 0; i < ctx->info->param_count; i++) {
+        emit_instruction(ctx, "in", 0, NULL);
+        char* operand = format_int(i);
+        emit_instruction1(ctx, "stg", operand);
+        free(operand);
+    }
+}
+
+static void emit_all_vars_output(CodegenContext* ctx)
+{
+    if (!ctx || !ctx->info) {
+        return;
+    }
+
+    int total = ctx->info->param_count + ctx->info->local_count;
+    for (int i = 0; i < total; i++) {
+        char* operand = format_int(i);
+        emit_instruction1(ctx, "ldg", operand);
+        free(operand);
+        emit_instruction(ctx, "out", 0, NULL);
+    }
+}
+
 static bool emit_function_call(CodegenContext* ctx, const OpNode* node)
 {
     if (!node || !node->text) {
@@ -580,7 +609,12 @@ static void emit_node(CodegenContext* ctx, CFGNode* node, JumpPatchList* patches
         || node->type == NODE_WHILE
         || node->type == NODE_REPEAT_CONDITION;
 
+    if (node->type == NODE_ENTRY) {
+        emit_param_inputs(ctx);
+    }
+
     if (node->type == NODE_EXIT) {
+        emit_all_vars_output(ctx);
         emit_instruction(ctx, "halt", 0, NULL);
         return;
     }
