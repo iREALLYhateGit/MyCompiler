@@ -12,7 +12,7 @@ static void collectError(pANTLR3_BASE_RECOGNIZER recognizer,
     pANTLR3_EXCEPTION ex = recognizer->state->exception;
     recognizer->state->errorCount++;
 
-    const char* msg = (const char*)ex->message;
+    const char* msg = ex && ex->message ? (const char*)ex->message : "Unexpected token";
 
     char*** listPtr = (char***)&recognizer->state->userp;
     char** list = *listPtr;
@@ -20,7 +20,9 @@ static void collectError(pANTLR3_BASE_RECOGNIZER recognizer,
     int index = recognizer->state->errorCount - 1;
 
     list[index] = malloc(strlen(msg) + 1);
-    strcpy(list[index], msg);
+    if (list[index]) {
+        strcpy(list[index], msg);
+    }
 }
 
 ParseResult parseFile(const char* filename)

@@ -1,0 +1,6 @@
+method imported(a: int): int from "native_add" in "native.dll";
+
+method main()
+begin
+    imported(1);
+end;

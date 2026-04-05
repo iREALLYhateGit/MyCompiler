@@ -1,0 +1,33 @@
+interface IPrinter
+begin
+    method print();
+end
+
+class Point
+var x: int;
+begin
+    public method getX(): int
+    begin
+        x;
+    end;
+end
+
+class ColoredPoint : Point implements IPrinter
+var color: int;
+begin
+    public method print()
+    begin
+        write(color);
+    end;
+end
+
+method main()
+var p: ColoredPoint;
+begin
+    p.x := 7;
+    p.color := 9;
+    p.print();
+end;
+
+method read();
+method write(num : int);

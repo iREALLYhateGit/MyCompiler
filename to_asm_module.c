@@ -64,8 +64,14 @@ typedef struct {
     InstructionList instructions;
     DataItemList data_items;
     const char** var_names;
+    const char** var_types;
     int var_count;
 } CodegenContext;
+
+static int emit_instruction(CodegenContext* ctx, const char* mnemonic, int operand_count, const char** operands);
+static int emit_instruction1(CodegenContext* ctx, const char* mnemonic, const char* operand);
+static void emit_indexed_instruction(CodegenContext* ctx, const char* mnemonic, int index);
+static bool emit_expression(CodegenContext* ctx, const OpNode* node);
 
 static void instruction_list_init(InstructionList* list)
 {
@@ -316,7 +322,7 @@ static void set_codegen_error(CodegenContext* ctx, const char* message)
     snprintf(ctx->error_message, sizeof(ctx->error_message), "%s", message);
 }
 
-static const SubprogramInfo* find_subprogram_by_name(const SubprogramCollection* subprograms, const char* name)
+static const SubprogramInfo* find_global_subprogram_by_name(const SubprogramCollection* subprograms, const char* name)
 {
     if (!subprograms || !name) {
         return NULL;
@@ -324,6 +330,9 @@ static const SubprogramInfo* find_subprogram_by_name(const SubprogramCollection*
 
     for (int i = 0; i < subprograms->count; i++) {
         const SubprogramInfo* info = &subprograms->items[i];
+        if (info->owner_type_name) {
+            continue;
+        }
         if (info->name && strcmp(info->name, name) == 0) {
             return info;
         }
@@ -344,6 +353,10 @@ static bool subprogram_returns_value(const SubprogramInfo* info)
 static bool is_empty_builtin(const SubprogramInfo* info, const char* expected_name)
 {
     if (!info || !expected_name || !info->name) {
+        return false;
+    }
+
+    if (info->owner_type_name) {
         return false;
     }
 
@@ -392,29 +405,73 @@ static bool is_write_builtin(const SubprogramInfo* info)
     return equals_ignore_case(info->param_types[0], "int");
 }
 
-static int type_size_bytes(const char* type)
+static bool is_builtin_type_name(const char* type_name)
 {
-    if (!type) {
-        return 4;
+    if (!type_name) {
+        return false;
     }
 
-    if (equals_ignore_case(type, "bool")) {
-        return 1;
-    }
-    if (equals_ignore_case(type, "byte")) {
-        return 1;
-    }
-    if (equals_ignore_case(type, "char")) {
-        return 1;
-    }
-    if (equals_ignore_case(type, "long") || equals_ignore_case(type, "ulong")) {
-        return 8;
-    }
-
-    return 4;
+    return equals_ignore_case(type_name, "bool")
+        || equals_ignore_case(type_name, "byte")
+        || equals_ignore_case(type_name, "int")
+        || equals_ignore_case(type_name, "uint")
+        || equals_ignore_case(type_name, "long")
+        || equals_ignore_case(type_name, "ulong")
+        || equals_ignore_case(type_name, "char")
+        || equals_ignore_case(type_name, "string")
+        || equals_ignore_case(type_name, "void");
 }
 
-static int find_var_index(const CodegenContext* ctx, const char* name)
+static void append_codegen_slot(CodegenContext* ctx, const char* name, const char* type_name)
+{
+    if (!ctx || !name || !type_name) {
+        return;
+    }
+
+    const char** new_names = realloc((void*)ctx->var_names, sizeof(char*) * (ctx->var_count + 1));
+    const char** new_types = realloc((void*)ctx->var_types, sizeof(char*) * (ctx->var_count + 1));
+    if (!new_names || !new_types) {
+        return;
+    }
+
+    ctx->var_names = new_names;
+    ctx->var_types = new_types;
+    ctx->var_names[ctx->var_count] = strdup(name);
+    ctx->var_types[ctx->var_count] = strdup(type_name);
+    data_item_list_add_size(&ctx->data_items, getTypeSizeBytes(ctx->subprograms, type_name));
+    ctx->var_count++;
+}
+
+static void append_flattened_slots(CodegenContext* ctx, const char* prefix, const char* type_name)
+{
+    if (!ctx || !prefix || !type_name) {
+        return;
+    }
+
+    const UserTypeInfo* type_info = findUserTypeInfo(ctx->subprograms, type_name);
+    if (!type_info || type_info->kind != USER_TYPE_CLASS) {
+        append_codegen_slot(ctx, prefix, type_name);
+        return;
+    }
+
+    if (type_info->resolved_field_count == 0) {
+        append_codegen_slot(ctx, prefix, "int");
+        return;
+    }
+
+    for (int i = 0; i < type_info->resolved_field_count; i++) {
+        const FieldInfo* field = &type_info->resolved_fields[i];
+        char buffer[512];
+        snprintf(buffer, sizeof(buffer), "%s.%s", prefix, field->name ? field->name : "field");
+        if (is_builtin_type_name(field->type_name)) {
+            append_codegen_slot(ctx, buffer, field->type_name);
+        } else {
+            append_flattened_slots(ctx, buffer, field->type_name);
+        }
+    }
+}
+
+static int find_var_index_exact(const CodegenContext* ctx, const char* name)
 {
     if (!ctx || !name) {
         return -1;
@@ -427,6 +484,110 @@ static int find_var_index(const CodegenContext* ctx, const char* name)
     }
 
     return -1;
+}
+
+static int find_var_index(const CodegenContext* ctx, const char* name)
+{
+    int exact_index = find_var_index_exact(ctx, name);
+    if (exact_index >= 0) {
+        return exact_index;
+    }
+
+    if (ctx && ctx->info && ctx->info->owner_type_name && name && strncmp(name, "this.", 5) != 0) {
+        char buffer[512];
+        snprintf(buffer, sizeof(buffer), "this.%s", name);
+        return find_var_index_exact(ctx, buffer);
+    }
+
+    return -1;
+}
+
+static const char* find_var_type(const CodegenContext* ctx, const char* name)
+{
+    int index = find_var_index(ctx, name);
+    if (index < 0 || !ctx || !ctx->var_types) {
+        return NULL;
+    }
+    return ctx->var_types[index];
+}
+
+static const char* find_declared_identifier_type(const CodegenContext* ctx, const char* name)
+{
+    if (!ctx || !ctx->info || !name) {
+        return NULL;
+    }
+
+    if (ctx->info->owner_type_name && strcmp(name, "this") == 0) {
+        return ctx->info->owner_type_name;
+    }
+
+    for (int i = 0; i < ctx->info->param_count; i++) {
+        const char* param_name = ctx->info->param_names ? ctx->info->param_names[i] : NULL;
+        const char* param_type = ctx->info->param_types ? ctx->info->param_types[i] : NULL;
+        if (param_name && param_type && strcmp(param_name, name) == 0) {
+            return param_type;
+        }
+    }
+
+    for (int i = 0; i < ctx->info->local_count; i++) {
+        const char* local_name = ctx->info->local_names ? ctx->info->local_names[i] : NULL;
+        const char* local_type = ctx->info->local_types ? ctx->info->local_types[i] : NULL;
+        if (local_name && local_type && strcmp(local_name, name) == 0) {
+            return local_type;
+        }
+    }
+
+    if (ctx->info->owner_type_name) {
+        const UserTypeInfo* owner_type = findUserTypeInfo(ctx->subprograms, ctx->info->owner_type_name);
+        const FieldInfo* field = findResolvedFieldInfo(owner_type, name);
+        if (field && field->type_name) {
+            return field->type_name;
+        }
+    }
+
+    return NULL;
+}
+
+static const char* find_member_type(const CodegenContext* ctx, const char* owner_type_name, const char* member_name)
+{
+    if (!ctx || !owner_type_name || !member_name) {
+        return NULL;
+    }
+
+    const UserTypeInfo* owner_type = findUserTypeInfo(ctx->subprograms, owner_type_name);
+    const FieldInfo* field = findResolvedFieldInfo(owner_type, member_name);
+    return field ? field->type_name : NULL;
+}
+
+static char* build_access_path(const OpNode* node)
+{
+    if (!node) {
+        return NULL;
+    }
+
+    if (node->type == OP_IDENTIFIER) {
+        return node->text ? strdup(node->text) : NULL;
+    }
+
+    if (node->type == OP_MEMBER_ACCESS && node->operand_count > 0) {
+        char* base = build_access_path(node->operands[0]);
+        if (!base) {
+            return NULL;
+        }
+
+        size_t needed = strlen(base) + strlen(node->text ? node->text : "") + 2;
+        char* path = malloc(needed);
+        if (!path) {
+            free(base);
+            return NULL;
+        }
+
+        snprintf(path, needed, "%s.%s", base, node->text ? node->text : "");
+        free(base);
+        return path;
+    }
+
+    return NULL;
 }
 
 static bool parse_binary_literal(const char* text, int* out_value)
@@ -530,6 +691,182 @@ static bool parse_int_literal(const char* text, int* out_value)
     return false;
 }
 
+static const char* infer_expression_type(CodegenContext* ctx, const OpNode* node);
+
+static const SubprogramInfo* find_method_on_type(const SubprogramCollection* subprograms,
+                                                 const char* owner_type_name,
+                                                 const char* method_name,
+                                                 const OpNode* call_node,
+                                                 CodegenContext* ctx)
+{
+    if (!subprograms || !owner_type_name || !method_name || !call_node) {
+        return NULL;
+    }
+
+    const UserTypeInfo* type_info = findUserTypeInfo(subprograms, owner_type_name);
+    if (!type_info) {
+        return NULL;
+    }
+
+    for (int i = 0; i < subprograms->count; i++) {
+        const SubprogramInfo* info = &subprograms->items[i];
+        if (!info->owner_type_name || strcmp(info->owner_type_name, type_info->name) != 0) {
+            continue;
+        }
+        if (!info->name || strcmp(info->name, method_name) != 0) {
+            continue;
+        }
+        if (info->param_count != call_node->operand_count - 1) {
+            continue;
+        }
+
+        bool matches = true;
+        for (int arg_index = 1; arg_index < call_node->operand_count; arg_index++) {
+            const char* arg_type = infer_expression_type(ctx, call_node->operands[arg_index]);
+            const char* param_type = info->param_types ? info->param_types[arg_index - 1] : NULL;
+            if (!arg_type || !param_type || strcmp(arg_type, param_type) != 0) {
+                matches = false;
+                break;
+            }
+        }
+
+        if (matches) {
+            return info;
+        }
+    }
+
+    if (type_info->base_type_name) {
+        return find_method_on_type(subprograms, type_info->base_type_name, method_name, call_node, ctx);
+    }
+
+    return NULL;
+}
+
+static const char* infer_expression_type(CodegenContext* ctx, const OpNode* node)
+{
+    if (!ctx || !node) {
+        return NULL;
+    }
+
+    switch (node->type) {
+        case OP_LITERAL:
+            if (!node->text) {
+                return "int";
+            }
+            if (strcmp(node->text, "true") == 0 || strcmp(node->text, "false") == 0) {
+                return "bool";
+            }
+            if (node->text[0] == '"') {
+                return "string";
+            }
+            if (node->text[0] == '\'') {
+                return "char";
+            }
+            return "int";
+        case OP_IDENTIFIER:
+        {
+            const char* type_name = find_var_type(ctx, node->text);
+            return type_name ? type_name : find_declared_identifier_type(ctx, node->text);
+        }
+        case OP_MEMBER_ACCESS: {
+            char* path = build_access_path(node);
+            const char* type_name = path ? find_var_type(ctx, path) : NULL;
+            free(path);
+            if (type_name) {
+                return type_name;
+            }
+
+            if (node->operand_count > 0 && node->text) {
+                const char* owner_type = infer_expression_type(ctx, node->operands[0]);
+                return find_member_type(ctx, owner_type, node->text);
+            }
+
+            return NULL;
+        }
+        case OP_ASSIGNMENT:
+            if (node->operand_count > 0) {
+                return infer_expression_type(ctx, node->operands[0]);
+            }
+            return NULL;
+        case OP_ADDITION:
+        case OP_SUBTRACTION:
+        case OP_MULTIPLICATION:
+        case OP_DIVISION:
+        case OP_MODULO:
+        case OP_UNARY_PLUS:
+        case OP_UNARY_MINUS:
+            return "int";
+        case OP_LOGICAL_AND:
+        case OP_LOGICAL_OR:
+        case OP_LOGICAL_NOT:
+        case OP_EQUAL:
+        case OP_NOT_EQUAL:
+        case OP_LESS_THAN:
+        case OP_LESS_THAN_OR_EQUAL:
+        case OP_GREATER_THAN:
+        case OP_GREATER_THAN_OR_EQUAL:
+            return "bool";
+        case OP_FUNCTION_CALL: {
+            const SubprogramInfo* callee = find_global_subprogram_by_name(ctx->subprograms, node->text);
+            return callee ? callee->return_type : NULL;
+        }
+        case OP_MEMBER_CALL: {
+            if (node->operand_count <= 0) {
+                return NULL;
+            }
+            const char* owner_type = infer_expression_type(ctx, node->operands[0]);
+            const SubprogramInfo* callee = find_method_on_type(ctx->subprograms, owner_type, node->text, node, ctx);
+            return callee ? callee->return_type : NULL;
+        }
+        default:
+            return NULL;
+    }
+}
+
+static void emit_load_from_path(CodegenContext* ctx, const char* path)
+{
+    int index = find_var_index(ctx, path);
+    if (index >= 0) {
+        emit_indexed_instruction(ctx, "ldg", index);
+    } else {
+        emit_instruction1(ctx, "pushi", "0");
+    }
+}
+
+static void emit_store_to_path(CodegenContext* ctx, const char* path)
+{
+    int index = find_var_index(ctx, path);
+    if (index >= 0) {
+        emit_indexed_instruction(ctx, "stg", index);
+    } else {
+        emit_instruction(ctx, "pop", 0, NULL);
+    }
+}
+
+static void emit_receiver_slots(CodegenContext* ctx, const char* prefix, const char* type_name)
+{
+    if (!ctx || !prefix || !type_name) {
+        return;
+    }
+
+    const UserTypeInfo* type_info = findUserTypeInfo(ctx->subprograms, type_name);
+    if (!type_info || type_info->kind != USER_TYPE_CLASS) {
+        emit_load_from_path(ctx, prefix);
+        return;
+    }
+
+    for (int i = 0; i < type_info->resolved_field_count; i++) {
+        const FieldInfo* field = &type_info->resolved_fields[i];
+        char buffer[512];
+        snprintf(buffer, sizeof(buffer), "%s.%s", prefix, field->name ? field->name : "field");
+        if (is_builtin_type_name(field->type_name)) {
+            emit_load_from_path(ctx, buffer);
+        } else {
+            emit_receiver_slots(ctx, buffer, field->type_name);
+        }
+    }
+}
+
 static int emit_instruction(CodegenContext* ctx, const char* mnemonic, int operand_count, const char** operands)
 {
     return instruction_list_add(&ctx->instructions, mnemonic, operand_count, operands);
@@ -570,13 +907,145 @@ static bool emit_binary_left_fold(CodegenContext* ctx, const OpNode* node, const
     return true;
 }
 
+static int count_flattened_type_slots(const SubprogramCollection* subprograms, const char* type_name)
+{
+    const UserTypeInfo* type_info = findUserTypeInfo(subprograms, type_name);
+    if (!type_info || type_info->kind != USER_TYPE_CLASS) {
+        return 1;
+    }
+
+    int count = 0;
+    for (int i = 0; i < type_info->resolved_field_count; i++) {
+        const FieldInfo* field = &type_info->resolved_fields[i];
+        if (is_builtin_type_name(field->type_name)) {
+            count++;
+        } else {
+            count += count_flattened_type_slots(subprograms, field->type_name);
+        }
+    }
+    return count;
+}
+
+static int get_subprogram_slot_count(const SubprogramCollection* subprograms, const SubprogramInfo* info)
+{
+    if (!info) {
+        return 0;
+    }
+
+    int slot_count = 0;
+    if (info->owner_type_name) {
+        slot_count += count_flattened_type_slots(subprograms, info->owner_type_name);
+    }
+    for (int i = 0; i < info->param_count; i++) {
+        slot_count += count_flattened_type_slots(subprograms, info->param_types ? info->param_types[i] : NULL);
+    }
+    return slot_count;
+}
+
+static bool emit_call_common(CodegenContext* ctx,
+                             const SubprogramInfo* callee,
+                             const OpNode* receiver_node,
+                             const OpNode* call_node,
+                             int explicit_arg_start)
+{
+    if (!ctx || !callee || !call_node) {
+        return false;
+    }
+
+    if (callee->import_info.is_imported) {
+        char buffer[256];
+        snprintf(buffer, sizeof(buffer), "Imported method '%s' cannot be executed because import calls are not supported by the VM backend.",
+                 callee->name ? callee->name : "<unknown>");
+        set_codegen_error(ctx, buffer);
+        return false;
+    }
+
+    if (callee->owner_type_name && !receiver_node) {
+        set_codegen_error(ctx, "Internal error: method call is missing receiver.");
+        return false;
+    }
+
+    if (!ctx->return_sites) {
+        set_codegen_error(ctx, "Internal error: call return-site tracker is missing.");
+        return false;
+    }
+
+    if (!is_builtin_type_name(callee->return_type) && !equals_ignore_case(callee->return_type, "void")) {
+        char buffer[256];
+        snprintf(buffer, sizeof(buffer), "Custom return type '%s' is not supported in backend calls to '%s'.",
+                 callee->return_type ? callee->return_type : "<unknown>",
+                 callee->name ? callee->name : "<unknown>");
+        set_codegen_error(ctx, buffer);
+        return false;
+    }
+
+    const ReturnSite* return_site = return_site_list_add(ctx->return_sites);
+    if (!return_site || !return_site->continue_label) {
+        set_codegen_error(ctx, "Out of memory while preparing call return site.");
+        return false;
+    }
+
+    for (int i = 0; i < ctx->var_count; i++) {
+        emit_indexed_instruction(ctx, "ldg", i);
+    }
+
+    if (receiver_node) {
+        char* receiver_path = build_access_path(receiver_node);
+        const char* receiver_type = callee->owner_type_name ? callee->owner_type_name
+                                                            : infer_expression_type(ctx, receiver_node);
+        if (!receiver_path || !receiver_type) {
+            free(receiver_path);
+            set_codegen_error(ctx, "Failed to resolve receiver for member call.");
+            return false;
+        }
+        emit_receiver_slots(ctx, receiver_path, receiver_type);
+        free(receiver_path);
+    }
+
+    for (int i = explicit_arg_start; i < call_node->operand_count; i++) {
+        bool has_value = emit_expression(ctx, call_node->operands[i]);
+        if (ctx->has_error) {
+            return false;
+        }
+        if (!has_value) {
+            emit_instruction1(ctx, "pushi", "0");
+        }
+    }
+
+    int callee_slot_count = get_subprogram_slot_count(ctx->subprograms, callee);
+    for (int i = callee_slot_count - 1; i >= 0; i--) {
+        emit_indexed_instruction(ctx, "stg", i);
+    }
+
+    char* return_id = format_int(return_site->id);
+    emit_instruction1(ctx, "pushi", return_id);
+    free(return_id);
+
+    char* label = sanitize_label(callee->asm_name ? callee->asm_name : callee->name);
+    emit_instruction1(ctx, "jmp", label);
+    free(label);
+
+    emit_label(ctx, return_site->continue_label);
+
+    for (int i = ctx->var_count - 1; i >= 0; i--) {
+        emit_indexed_instruction(ctx, "stg", i);
+    }
+
+    if (subprogram_returns_value(callee)) {
+        emit_indexed_instruction(ctx, "ldg", RUNTIME_RETVAL_SLOT);
+        return true;
+    }
+
+    return false;
+}
+
 static bool emit_function_call(CodegenContext* ctx, const OpNode* node)
 {
     if (!ctx || !node || !node->text) {
         return false;
     }
 
-    const SubprogramInfo* callee = find_subprogram_by_name(ctx->subprograms, node->text);
+    const SubprogramInfo* callee = find_global_subprogram_by_name(ctx->subprograms, node->text);
 
     if (callee && is_read_builtin(callee)) {
         if (node->operand_count != 0) {
@@ -646,59 +1115,37 @@ static bool emit_function_call(CodegenContext* ctx, const OpNode* node)
         return false;
     }
 
-    if (!ctx->return_sites) {
-        set_codegen_error(ctx, "Internal error: call return-site tracker is missing.");
+    return emit_call_common(ctx, callee, NULL, node, 0);
+}
+
+static bool emit_member_call(CodegenContext* ctx, const OpNode* node)
+{
+    if (!ctx || !node || !node->text || node->operand_count <= 0) {
         return false;
     }
 
-    const ReturnSite* return_site = return_site_list_add(ctx->return_sites);
-    if (!return_site || !return_site->continue_label) {
-        set_codegen_error(ctx, "Out of memory while preparing call return site.");
+    const char* owner_type = infer_expression_type(ctx, node->operands[0]);
+    if (!owner_type) {
+        char buffer[256];
+        snprintf(buffer, sizeof(buffer), "Cannot resolve receiver type for method '%s' in '%s'.",
+                 node->text,
+                 ctx->info && ctx->info->name ? ctx->info->name : "<unknown>");
+        set_codegen_error(ctx, buffer);
         return false;
     }
 
-    // Save current subprogram variables so recursion and nested calls are safe.
-    for (int i = 0; i < ctx->var_count; i++) {
-        emit_indexed_instruction(ctx, "ldg", i);
+    const SubprogramInfo* callee = find_method_on_type(ctx->subprograms, owner_type, node->text, node, ctx);
+    if (!callee) {
+        char buffer[256];
+        snprintf(buffer, sizeof(buffer), "Unknown method overload '%s' for receiver type '%s' in '%s'.",
+                 node->text,
+                 owner_type,
+                 ctx->info && ctx->info->name ? ctx->info->name : "<unknown>");
+        set_codegen_error(ctx, buffer);
+        return false;
     }
 
-    // Evaluate arguments left-to-right.
-    for (int i = 0; i < node->operand_count; i++) {
-        bool has_value = emit_expression(ctx, node->operands[i]);
-        if (ctx->has_error) {
-            return false;
-        }
-        if (!has_value) {
-            emit_instruction1(ctx, "pushi", "0");
-        }
-    }
-
-    // Move argument values into callee parameter slots.
-    for (int i = node->operand_count - 1; i >= 0; i--) {
-        emit_indexed_instruction(ctx, "stg", i);
-    }
-
-    char* return_id = format_int(return_site->id);
-    emit_instruction1(ctx, "pushi", return_id);
-    free(return_id);
-
-    char* label = sanitize_label(callee->name);
-    emit_instruction1(ctx, "jmp", label);
-    free(label);
-
-    emit_label(ctx, return_site->continue_label);
-
-    // Restore saved caller variables.
-    for (int i = ctx->var_count - 1; i >= 0; i--) {
-        emit_indexed_instruction(ctx, "stg", i);
-    }
-
-    if (subprogram_returns_value(callee)) {
-        emit_indexed_instruction(ctx, "ldg", RUNTIME_RETVAL_SLOT);
-        return true;
-    }
-
-    return false;
+    return emit_call_common(ctx, callee, node->operands[0], node, 1);
 }
 
 static bool emit_expression(CodegenContext* ctx, const OpNode* node)
@@ -734,11 +1181,14 @@ static bool emit_expression(CodegenContext* ctx, const OpNode* node)
             return true;
         }
         case OP_IDENTIFIER: {
-            int index = find_var_index(ctx, node->text);
-            if (index >= 0) {
-                char* operand = format_int(index);
-                emit_instruction1(ctx, "ldg", operand);
-                free(operand);
+            emit_load_from_path(ctx, node->text);
+            return true;
+        }
+        case OP_MEMBER_ACCESS: {
+            char* path = build_access_path(node);
+            if (path) {
+                emit_load_from_path(ctx, path);
+                free(path);
             } else {
                 emit_instruction1(ctx, "pushi", "0");
             }
@@ -751,11 +1201,12 @@ static bool emit_expression(CodegenContext* ctx, const OpNode* node)
                 emit_expression(ctx, value);
 
                 if (target && target->type == OP_IDENTIFIER) {
-                    int index = find_var_index(ctx, target->text);
-                    if (index >= 0) {
-                        char* operand = format_int(index);
-                        emit_instruction1(ctx, "stg", operand);
-                        free(operand);
+                    emit_store_to_path(ctx, target->text);
+                } else if (target && target->type == OP_MEMBER_ACCESS) {
+                    char* path = build_access_path(target);
+                    if (path) {
+                        emit_store_to_path(ctx, path);
+                        free(path);
                     } else {
                         emit_instruction(ctx, "pop", 0, NULL);
                     }
@@ -817,6 +1268,8 @@ static bool emit_expression(CodegenContext* ctx, const OpNode* node)
         }
         case OP_FUNCTION_CALL:
             return emit_function_call(ctx, node);
+        case OP_MEMBER_CALL:
+            return emit_member_call(ctx, node);
         case OP_ARRAY_INDEX:
         case OP_UNKNOWN:
         default: {
@@ -1160,26 +1613,25 @@ static SubprogramImage* toAsmModuleInternal(const SubprogramInfo* info,
     instruction_list_init(&ctx.instructions);
     data_item_list_init(&ctx.data_items);
 
-    ctx.var_count = info->param_count + info->local_count;
-    if (ctx.var_count > 0) {
-        ctx.var_names = malloc(sizeof(char*) * ctx.var_count);
-        if (!ctx.var_names) {
-            if (error_message) {
-                *error_message = strdup("Out of memory while allocating variable table.");
-            }
-            return NULL;
+    if (ctx.method_returns_value && !is_builtin_type_name(info->return_type)) {
+        if (error_message) {
+            *error_message = strdup("Custom return types are not supported by the ASM backend.");
         }
+        return NULL;
     }
 
-    int var_index = 0;
+    if (info->owner_type_name) {
+        append_flattened_slots(&ctx, "this", info->owner_type_name);
+    }
     for (int i = 0; i < info->param_count; i++) {
-        ctx.var_names[var_index++] = info->param_names[i];
-        data_item_list_add_size(&ctx.data_items, type_size_bytes(info->param_types[i]));
+        append_flattened_slots(&ctx,
+                               info->param_names && info->param_names[i] ? info->param_names[i] : "arg",
+                               info->param_types && info->param_types[i] ? info->param_types[i] : "int");
     }
-
     for (int i = 0; i < info->local_count; i++) {
-        ctx.var_names[var_index++] = info->local_names[i];
-        data_item_list_add_size(&ctx.data_items, type_size_bytes(info->local_types[i]));
+        append_flattened_slots(&ctx,
+                               info->local_names && info->local_names[i] ? info->local_names[i] : "local",
+                               info->local_types && info->local_types[i] ? info->local_types[i] : "int");
     }
 
     ControlFlowGraph* cfg = info->cfg;
@@ -1189,6 +1641,7 @@ static SubprogramImage* toAsmModuleInternal(const SubprogramInfo* info,
             *error_message = strdup("Out of memory while allocating CFG node table.");
         }
         free(ctx.var_names);
+        free(ctx.var_types);
         free(ctx.data_items.items);
         return NULL;
     }
@@ -1210,7 +1663,12 @@ static SubprogramImage* toAsmModuleInternal(const SubprogramInfo* info,
         }
         free(entries);
         free(patches.items);
+        for (int i = 0; i < ctx.var_count; i++) {
+            free((void*)ctx.var_names[i]);
+            free((void*)ctx.var_types[i]);
+        }
         free(ctx.var_names);
+        free(ctx.var_types);
         for (int i = 0; i < ctx.instructions.count; i++) {
             free(ctx.instructions.items[i].mnemonic);
             for (int op = 0; op < ctx.instructions.items[i].operand_count; op++) {
@@ -1245,7 +1703,12 @@ static SubprogramImage* toAsmModuleInternal(const SubprogramInfo* info,
 
     free(entries);
     free(patches.items);
+    for (int i = 0; i < ctx.var_count; i++) {
+        free((void*)ctx.var_names[i]);
+        free((void*)ctx.var_types[i]);
+    }
     free(ctx.var_names);
+    free(ctx.var_types);
 
     return image;
 }
@@ -1255,6 +1718,10 @@ SubprogramImage* toAsmModule(const SubprogramInfo* info)
     SubprogramCollection subprograms;
     subprograms.items = (SubprogramInfo*)info;
     subprograms.count = info ? 1 : 0;
+    subprograms.user_types = NULL;
+    subprograms.user_type_count = 0;
+    subprograms.errors = NULL;
+    subprograms.error_count = 0;
     ReturnSiteList return_sites;
     return_site_list_init(&return_sites);
     SubprogramImage* image = toAsmModuleInternal(info, &subprograms, &return_sites, true, false, NULL);
@@ -1279,12 +1746,67 @@ static const SubprogramInfo* find_main_method(const SubprogramCollection* subpro
             continue;
         }
 
-        if (strcmp(info->name, "main") == 0 && info->param_count == 0) {
+        if (!info->owner_type_name && strcmp(info->name, "main") == 0 && info->param_count == 0) {
             return info;
         }
     }
 
     return NULL;
+}
+
+static void print_metadata_label(FILE* out, const char* raw_text)
+{
+    if (!out || !raw_text) {
+        return;
+    }
+
+    char* label = sanitize_label(raw_text);
+    if (!label) {
+        return;
+    }
+
+    fprintf(out, "%s:\n", label);
+    free(label);
+}
+
+static void printTypeMetadata(const SubprogramCollection* subprograms, FILE* out)
+{
+    if (!subprograms || !out || subprograms->user_type_count <= 0) {
+        return;
+    }
+
+    fprintf(out, "[section TYPE_INFO]\n");
+    for (int i = 0; i < subprograms->user_type_count; i++) {
+        const UserTypeInfo* type_info = &subprograms->user_types[i];
+        const char* kind = type_info->kind == USER_TYPE_INTERFACE ? "interface" : "class";
+        char type_buffer[512];
+        snprintf(type_buffer, sizeof(type_buffer),
+                 "TYPEINFO_type_%s_%s_size_%d",
+                 kind,
+                 type_info->name ? type_info->name : "unnamed",
+                 type_info->total_size_bytes);
+        print_metadata_label(out, type_buffer);
+        for (int j = 0; j < type_info->resolved_field_count; j++) {
+            const FieldInfo* field = &type_info->resolved_fields[j];
+            char field_buffer[512];
+            snprintf(field_buffer, sizeof(field_buffer),
+                     "TYPEINFO_field_%s_%s_%s_offset_%d",
+                     type_info->name ? type_info->name : "unnamed",
+                     field->name ? field->name : "field",
+                     field->type_name ? field->type_name : "type",
+                     field->offset_bytes);
+            print_metadata_label(out, field_buffer);
+        }
+        for (int j = 0; j < type_info->interface_count; j++) {
+            char implements_buffer[512];
+            snprintf(implements_buffer, sizeof(implements_buffer),
+                     "TYPEINFO_implements_%s_%s",
+                     type_info->name ? type_info->name : "unnamed",
+                     type_info->interface_names && type_info->interface_names[j] ? type_info->interface_names[j] : "interface");
+            print_metadata_label(out, implements_buffer);
+        }
+    }
+    fprintf(out, "\n");
 }
 
 bool generateProgramAsm(const SubprogramCollection* subprograms, FILE* out, char** error_message)
@@ -1306,6 +1828,7 @@ bool generateProgramAsm(const SubprogramCollection* subprograms, FILE* out, char
 
     const SubprogramInfo* main_method = find_main_method(subprograms);
     if (!main_method) {
+        printTypeMetadata(subprograms, out);
         fprintf(out, "[section CODE_CONST]\n");
         fprintf(out, "halt\n");
         return true;
@@ -1325,7 +1848,8 @@ bool generateProgramAsm(const SubprogramCollection* subprograms, FILE* out, char
 
     for (int i = 0; i < subprograms->count; i++) {
         const SubprogramInfo* info = &subprograms->items[i];
-        if (!info || !info->name || is_method_builtin_declaration(info)) {
+        if (!info || !info->name || is_method_builtin_declaration(info)
+            || info->import_info.is_imported || !info->has_body) {
             continue;
         }
 
@@ -1352,13 +1876,15 @@ bool generateProgramAsm(const SubprogramCollection* subprograms, FILE* out, char
         }
     }
 
+    printTypeMetadata(subprograms, out);
     fprintf(out, "[section CODE_CONST]\n");
     fprintf(out, "\n");
 
     for (int pass = 0; pass < 2; pass++) {
         for (int i = 0; i < subprograms->count; i++) {
             const SubprogramInfo* info = &subprograms->items[i];
-            if (!info || !info->name || is_method_builtin_declaration(info)) {
+            if (!info || !info->name || is_method_builtin_declaration(info)
+                || info->import_info.is_imported || !info->has_body) {
                 continue;
             }
 
@@ -1371,7 +1897,7 @@ bool generateProgramAsm(const SubprogramCollection* subprograms, FILE* out, char
                 continue;
             }
 
-            printSubprogramImage(images[i], info->name, out);
+            printSubprogramImage(images[i], info->asm_name ? info->asm_name : info->name, out);
             fprintf(out, "\n");
         }
     }

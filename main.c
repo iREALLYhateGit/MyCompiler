@@ -119,6 +119,14 @@ int process_file(const char* input_file_path, const char* ast_dir, const char* c
     printf("AST saved to: %s\n", ast_path);
 
     subprograms = generateSubprogramInfoCollection(input_file_path, result.tree);
+    if (subprograms.error_count > 0) {
+        fprintf(stderr, "Semantic analysis failed for source: %s\n", input_file_path);
+        for (int i = 0; i < subprograms.error_count; i++) {
+            fprintf(stderr, "Error: %s\n", subprograms.errors[i]);
+        }
+        goto cleanup;
+    }
+
     if (subprograms.count <= 0) {
         fprintf(stderr, "No methods were found in source: %s\n", input_file_path);
         goto cleanup;
@@ -130,7 +138,8 @@ int process_file(const char* input_file_path, const char* ast_dir, const char* c
             continue;
         }
 
-        char* method_component = sanitize_filename_component(subprogram->name);
+        const char* cfg_name = subprogram->asm_name ? subprogram->asm_name : subprogram->name;
+        char* method_component = sanitize_filename_component(cfg_name);
         char cfg_path[1024];
         snprintf(cfg_path, sizeof(cfg_path), "%s%c%s.%s.dot",
                  cfg_dir, PATH_SEPARATOR, base_name, method_component);

@@ -1,0 +1,13 @@
+interface IPrinter
+begin
+    method print();
+end
+
+class Broken implements IPrinter
+var value: int;
+begin
+end
+
+method main()
+begin
+end

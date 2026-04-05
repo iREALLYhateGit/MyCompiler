@@ -1,0 +1,23 @@
+class MathOps
+var value: int;
+begin
+    public method add(a: int): int
+    begin
+        a + value;
+    end;
+
+    public method add(a: int, b: int): int
+    begin
+        a + b + value;
+    end;
+end
+
+method imported(a: int): int from "native_add" in "native.dll";
+
+method main()
+var ops: MathOps;
+begin
+    ops.value := 4;
+    write(ops.add(1));
+    write(ops.add(1, 2));
+end;

@@ -1,0 +1,20 @@
+class Point
+var x: int;
+    y: int;
+begin
+    public method sum(): int
+    begin
+        x + y;
+    end;
+end
+
+method main()
+var p: Point;
+begin
+    p.x := 1;
+    p.y := 2;
+    write(p.sum());
+end;
+
+method read();
+method write(num : int);

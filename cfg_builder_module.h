@@ -62,8 +62,41 @@ typedef struct ControlFlowGraph {
     int max_edges;
 } ControlFlowGraph;
 
+typedef enum {
+    MEMBER_VISIBILITY_DEFAULT,
+    MEMBER_VISIBILITY_PUBLIC,
+    MEMBER_VISIBILITY_PRIVATE
+} MemberVisibility;
+
+typedef enum {
+    USER_TYPE_CLASS,
+    USER_TYPE_INTERFACE
+} UserTypeKind;
+
 typedef struct {
     char* name;
+    char* type_name;
+    char* declaring_type_name;
+    int offset_bytes;
+} FieldInfo;
+
+typedef struct {
+    char* name;
+    char** param_types;
+    int param_count;
+    char* return_type;
+} MethodSignatureInfo;
+
+typedef struct {
+    bool is_imported;
+    char* dll_name;
+    char* entry_name;
+} ImportInfo;
+
+typedef struct {
+    char* name;
+    char* owner_type_name;
+    char* asm_name;
     char** param_names;
     char** param_types;
     int param_count;
@@ -74,11 +107,33 @@ typedef struct {
     char* source_file;
     ControlFlowGraph* cfg;
     bool has_body;
+    bool is_method;
+    MemberVisibility visibility;
+    ImportInfo import_info;
 } SubprogramInfo;
+
+typedef struct {
+    UserTypeKind kind;
+    char* name;
+    char* base_type_name;
+    char** interface_names;
+    int interface_count;
+    FieldInfo* declared_fields;
+    int declared_field_count;
+    FieldInfo* resolved_fields;
+    int resolved_field_count;
+    MethodSignatureInfo* declared_methods;
+    int declared_method_count;
+    int total_size_bytes;
+} UserTypeInfo;
 
 typedef struct {
     SubprogramInfo* items;
     int count;
+    UserTypeInfo* user_types;
+    int user_type_count;
+    char** errors;
+    int error_count;
 } SubprogramCollection;
 
 typedef struct {
@@ -103,6 +158,9 @@ void freeCFG(ControlFlowGraph* cfg);
 
 // Subprogram helpers
 void freeSubprogramCollection(SubprogramCollection* collection);
+const UserTypeInfo* findUserTypeInfo(const SubprogramCollection* collection, const char* name);
+const FieldInfo* findResolvedFieldInfo(const UserTypeInfo* type_info, const char* field_name);
+int getTypeSizeBytes(const SubprogramCollection* collection, const char* type_name);
 
 // Call graph helpers
 CallGraph* buildCallGraph(const SubprogramCollection* collection);

@@ -8,6 +8,8 @@ options {
 tokens {
     SOURCE;
     METHOD_DECL;
+    CLASS_DECL;
+    INTERFACE_DECL;
     PARAMETERS;
     PARAMETER;
     TYPE;
@@ -20,6 +22,7 @@ tokens {
     BLOCK;
     EXPRESSION;
     CALL;
+    MEMBER_CALL;
     ASSIGN;
     VALUE;
     ARGUMENTS;
@@ -28,6 +31,15 @@ tokens {
     ARRAY_ELEMENT;
     ARRAY_ID;
     ARRAY_ELEMENT_INDEX;
+    MEMBER_ACCESS;
+    IMPORT_SPEC;
+    DLL_NAME;
+    DLL_ENTRY;
+    BASE_TYPE;
+    IMPLEMENTS;
+    MEMBER;
+    PUBLIC;
+    PRIVATE;
     ADD;
     SUBTRACT;
     MULTIPLY;
@@ -87,6 +99,13 @@ K_LONG: 'long';
 K_ULONG: 'ulong';
 K_CHAR: 'char';
 K_STRING: 'string';
+K_CLASS: 'class';
+K_INTERFACE: 'interface';
+K_IMPLEMENTS: 'implements';
+K_FROM: 'from';
+K_IN: 'in';
+K_PUBLIC: 'public';
+K_PRIVATE: 'private';
 
 IDENTIFIER: LETTER (LETTER|DIGIT)*;
 
@@ -105,7 +124,11 @@ source
       -> ^(SOURCE sourceItem*)
     ;
 
-sourceItem: funcDef;
+sourceItem
+    : funcDef
+    | classDef
+    | interfaceDef
+    ;
 
 typeRef
     : builtinType
@@ -119,35 +142,95 @@ builtinType
     : K_BOOL | K_BYTE | K_INT | K_UINT | K_LONG | K_ULONG | K_CHAR | K_STRING
     ;
 
-funcDef:
-   K_METHOD funcSignature (methodBody | ';')
-      -> ^(METHOD_DECL funcSignature methodBody?)
+funcDef
+    : K_METHOD funcSignature (methodBody | importSpec | ';')
+      -> ^(METHOD_DECL funcSignature methodBody? importSpec?)
     ;
 
-funcSignature: methodName '(' methodParameters? ')' methodReturnType -> methodName methodParameters? methodReturnType;
-
-methodName:
-    IDENTIFIER -> ^(ID IDENTIFIER)
+funcSignature
+    : methodName '(' methodParameters? ')' methodReturnType
+      -> methodName methodParameters? methodReturnType
     ;
 
-methodParameter: IDENTIFIER (':' typeRef)? -> ^(PARAMETER ^(ID IDENTIFIER) ^(TYPE typeRef)?);
-methodParameters: methodParameter (',' methodParameter)* -> ^(PARAMETERS methodParameter+);
+methodName
+    : IDENTIFIER -> ^(ID IDENTIFIER)
+    ;
 
-methodReturnType:
-    ':' typeRef -> ^(RETURN_TYPE typeRef)
+methodParameter
+    : IDENTIFIER (':' typeRef)?
+      -> ^(PARAMETER ^(ID IDENTIFIER) ^(TYPE typeRef)?)
+    ;
+
+methodParameters
+    : methodParameter (',' methodParameter)*
+      -> ^(PARAMETERS methodParameter+)
+    ;
+
+methodReturnType
+    : ':' typeRef -> ^(RETURN_TYPE typeRef)
     | -> ^(RETURN_TYPE VOID_VALUE)
     ;
 
-methodBody:
-    (K_VAR varDeclaration*)? statementBlock -> ^(BODY ^(VAR_DECLARATIONS varDeclaration*)? statementBlock)
+methodBody
+    : varsSpec? statementBlock
+      -> ^(BODY varsSpec? statementBlock)
     ;
 
-varDeclaration:
-    variableNameList (':' typeRef)? ';' -> ^(VAR_DECLARATION ^(TYPE typeRef)? variableNameList)
+varsSpec
+    : K_VAR varDeclaration*
+      -> ^(VAR_DECLARATIONS varDeclaration*)
     ;
 
-variableNameList:
-    IDENTIFIER (',' IDENTIFIER)* -> ^(VARIABLES (^(ID IDENTIFIER))+)
+varDeclaration
+    : variableNameList (':' typeRef)? ';'
+      -> ^(VAR_DECLARATION ^(TYPE typeRef)? variableNameList)
+    ;
+
+variableNameList
+    : IDENTIFIER (',' IDENTIFIER)*
+      -> ^(VARIABLES (^(ID IDENTIFIER))+)
+    ;
+
+importSpec
+    : K_FROM STRING K_IN STRING ';'
+      -> ^(IMPORT_SPEC ^(DLL_ENTRY STRING) ^(DLL_NAME STRING))
+    | K_FROM STRING ';'
+      -> ^(IMPORT_SPEC ^(DLL_NAME STRING))
+    ;
+
+classDef
+    : K_CLASS IDENTIFIER classBaseSpec? classImplementsSpec? varsSpec K_BEGIN member* K_END
+      -> ^(CLASS_DECL ^(ID IDENTIFIER) classBaseSpec? classImplementsSpec? varsSpec member*)
+    ;
+
+classBaseSpec
+    : ':' IDENTIFIER
+      -> ^(BASE_TYPE ^(ID IDENTIFIER))
+    ;
+
+classImplementsSpec
+    : K_IMPLEMENTS IDENTIFIER (',' IDENTIFIER)*
+      -> ^(IMPLEMENTS (^(ID IDENTIFIER))+)
+    ;
+
+member
+    : modifier? funcDef
+      -> ^(MEMBER modifier? funcDef)
+    ;
+
+modifier
+    : K_PUBLIC -> PUBLIC
+    | K_PRIVATE -> PRIVATE
+    ;
+
+interfaceDef
+    : K_INTERFACE IDENTIFIER K_BEGIN interfaceMember* K_END
+      -> ^(INTERFACE_DECL ^(ID IDENTIFIER) interfaceMember*)
+    ;
+
+interfaceMember
+    : K_METHOD funcSignature ';'
+      -> ^(METHOD_DECL funcSignature)
     ;
 
 /* ===========================
@@ -183,114 +266,151 @@ breakStatement
       -> ^(BREAK)
     ;
 
-statementBlock:
-    K_BEGIN statement* K_END ';' -> ^(BLOCK statement*)
+statementBlock
+    : K_BEGIN statement* K_END ';'
+      -> ^(BLOCK statement*)
     ;
 
-expressionStatement:
-    expression ';' -> expression
+expressionStatement
+    : expression ';' -> expression
     ;
 
 /* ===========================
    EXPRESSIONS
    =========================== */
 
-expression:
-    assignExpression
-    | calculationExpression -> ^(EXPRESSION calculationExpression);
-
-assignExpression:
-    IDENTIFIER ':=' calculationExpression -> ^(ASSIGN ^(ID IDENTIFIER) ^(VALUE calculationExpression));
-
-calculationExpression:
-    orExpression;
-
-orExpression:
-    (andExpression '||' orExpression) => a=andExpression ('||' b=orExpression)+ -> ^(OR $a $b+)
-    | andExpression
+expression
+    : (assignableExpression ':=') => assignExpression
+    | calculationExpression -> ^(EXPRESSION calculationExpression)
     ;
 
-andExpression:
-    (eqExpression '&&' andExpression) => a=eqExpression ('&&' b=andExpression)+ -> ^(AND $a $b+)
-    | eqExpression
+assignExpression
+    : assignableExpression ':=' calculationExpression
+      -> ^(ASSIGN assignableExpression ^(VALUE calculationExpression))
     ;
 
-eqExpression:
-    (relExpression equalOperator eqExpression) => relExpression equalOperator eqExpression -> ^(equalOperator relExpression eqExpression)
-    | relExpression
+assignableExpression
+    : memberAccessExpression
+    | indexerExpression
+    | placeExpression
     ;
 
-equalOperator:
-     '==' -> ^(EQUALS)
-     | '!=' -> ^(NOT_EQUALS);
-
-relExpression:
-    (addExpression compareOperator relExpression) => addExpression compareOperator relExpression -> ^(compareOperator addExpression relExpression)
-    | addExpression
+calculationExpression
+    : orExpression
     ;
 
-compareOperator:
-     '<' -> ^(LESS_THAN)
-     | '<=' -> ^(LESS_THAN_OR_EQUALS)
-     | '>' -> ^(MORE_THAN)
-     | '>=' -> ^(MORE_THAN_OR_EQUALS);
-
-addExpression:
-    (mulExpression plusSubtractOperator addExpression) => mulExpression plusSubtractOperator addExpression -> ^(plusSubtractOperator mulExpression addExpression)
-    | mulExpression
+orExpression
+    : andExpression ('||'^ andExpression)*
     ;
 
-plusSubtractOperator:
-     '+' -> ^(ADD)
-     | '-' -> ^(SUBTRACT);
-
-mulExpression:
-    (unaryExpression mulOperator mulExpression) => unaryExpression mulOperator mulExpression -> ^(mulOperator unaryExpression mulExpression)
-    | unaryExpression
+andExpression
+    : eqExpression ('&&'^ eqExpression)*
     ;
 
-mulOperator:
-     '*' -> ^(MULTIPLY)
-     | '/' -> ^(DIVISION)
-     | '%' -> ^(RESIDUE);
+eqExpression
+    : relExpression (equalOperator^ relExpression)*
+    ;
 
-unaryExpression:
-    unaryOp unaryExpression -> ^(UNARY_OPERATION unaryOp unaryExpression)
-    | primaryExpr;
+equalOperator
+    : '==' -> ^(EQUALS)
+    | '!=' -> ^(NOT_EQUALS)
+    ;
 
-unaryOp:
-    '+'
+relExpression
+    : addExpression (compareOperator^ addExpression)*
+    ;
+
+compareOperator
+    : '<' -> ^(LESS_THAN)
+    | '<=' -> ^(LESS_THAN_OR_EQUALS)
+    | '>' -> ^(MORE_THAN)
+    | '>=' -> ^(MORE_THAN_OR_EQUALS)
+    ;
+
+addExpression
+    : mulExpression (plusSubtractOperator^ mulExpression)*
+    ;
+
+plusSubtractOperator
+    : '+' -> ^(ADD)
+    | '-' -> ^(SUBTRACT)
+    ;
+
+mulExpression
+    : unaryExpression (mulOperator^ unaryExpression)*
+    ;
+
+mulOperator
+    : '*' -> ^(MULTIPLY)
+    | '/' -> ^(DIVISION)
+    | '%' -> ^(RESIDUE)
+    ;
+
+unaryExpression
+    : unaryOp unaryExpression -> ^(UNARY_OPERATION unaryOp unaryExpression)
+    | primaryExpr
+    ;
+
+unaryOp
+    : '+'
     | '-'
-    | '!';
+    | '!'
+    ;
 
-primaryExpr:
-    callExpression
+primaryExpr
+    : memberCallExpression
+    | memberAccessExpression
+    | callExpression
     | bracesExpression
     | indexerExpression
     | placeExpression
-    | literal;
+    | literal
+    ;
 
-callExpression:
-    IDENTIFIER '(' argumentList? ')' -> ^(CALL ^(ID IDENTIFIER) argumentList?);
+callExpression
+    : IDENTIFIER '(' argumentList? ')'
+      -> ^(CALL ^(ID IDENTIFIER) argumentList?)
+    ;
 
-argumentList:
-    calculationExpression (',' calculationExpression)* -> ^(ARGUMENTS calculationExpression+);
+memberChain
+    : IDENTIFIER '.' IDENTIFIER ('.' IDENTIFIER)*
+      -> ^(MEMBER_ACCESS IDENTIFIER+)
+    ;
 
-bracesExpression:
-    '(' calculationExpression ')' -> ^(IN_BRACES calculationExpression);
+memberCallExpression
+    : memberChain '(' argumentList? ')'
+      -> ^(MEMBER_CALL memberChain argumentList?)
+    ;
 
-indexerExpression:
-    IDENTIFIER '[' calculationExpression ']' -> ^(ARRAY_ELEMENT ^(ARRAY_ID IDENTIFIER) ^(ARRAY_ELEMENT_INDEX calculationExpression));
+memberAccessExpression
+    : memberChain
+    ;
 
-placeExpression:
-    IDENTIFIER -> ^(ID IDENTIFIER);
+argumentList
+    : calculationExpression (',' calculationExpression)*
+      -> ^(ARGUMENTS calculationExpression+)
+    ;
 
-literal:
-    K_TRUE   -> K_TRUE
-    | K_FALSE  -> K_FALSE
-    | STRING   -> STRING
-    | CHAR     -> CHAR
-    | HEX      -> HEX
-    | BITS     -> BITS
-    | DEC      -> DEC
+bracesExpression
+    : '(' calculationExpression ')'
+      -> ^(IN_BRACES calculationExpression)
+    ;
+
+indexerExpression
+    : IDENTIFIER '[' calculationExpression ']'
+      -> ^(ARRAY_ELEMENT ^(ARRAY_ID IDENTIFIER) ^(ARRAY_ELEMENT_INDEX calculationExpression))
+    ;
+
+placeExpression
+    : IDENTIFIER -> ^(ID IDENTIFIER)
+    ;
+
+literal
+    : K_TRUE -> K_TRUE
+    | K_FALSE -> K_FALSE
+    | STRING -> STRING
+    | CHAR -> CHAR
+    | HEX -> HEX
+    | BITS -> BITS
+    | DEC -> DEC
     ;

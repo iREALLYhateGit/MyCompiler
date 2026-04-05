@@ -221,6 +221,8 @@ const char* opTypeToString(OpType type)
         case OP_UNARY_MINUS: return "UNARY_MINUS";
         case OP_LOGICAL_NOT: return "LOGICAL_NOT";
         case OP_FUNCTION_CALL: return "CALL";
+        case OP_MEMBER_ACCESS: return "MEMBER_ACCESS";
+        case OP_MEMBER_CALL: return "MEMBER_CALL";
         case OP_ARRAY_INDEX: return "ARRAY_INDEX";
         case OP_IDENTIFIER: return "IDENTIFIER";
         case OP_LITERAL: return "LITERAL";
@@ -274,6 +276,81 @@ static OpNode* buildCallOp(pANTLR3_BASE_TREE node)
         pANTLR3_BASE_TREE args_node = node->getChild(node, 1);
         const char* args_text = getNodeText(args_node);
 
+        if (strcmp(args_text, "ARGUMENTS") == 0) {
+            ANTLR3_UINT32 arg_count = args_node->getChildCount(args_node);
+            for (ANTLR3_UINT32 i = 0; i < arg_count; i++) {
+                addOperand(op_node, buildOpTree(args_node->getChild(args_node, i)));
+            }
+        } else {
+            addOperand(op_node, buildOpTree(args_node));
+        }
+    }
+
+    return op_node;
+}
+
+static OpNode* buildIdentifierNode(const char* name)
+{
+    OpNode* op_node = createOpNode(OP_IDENTIFIER);
+    if (op_node) {
+        op_node->text = name ? strdup(name) : NULL;
+    }
+    return op_node;
+}
+
+static OpNode* buildMemberAccessChainPrefix(pANTLR3_BASE_TREE node, ANTLR3_UINT32 segment_count)
+{
+    if (!node || segment_count == 0) {
+        return NULL;
+    }
+
+    OpNode* current = buildIdentifierNode(getNodeText(node->getChild(node, 0)));
+    for (ANTLR3_UINT32 i = 1; i < segment_count; i++) {
+        OpNode* access = createOpNode(OP_MEMBER_ACCESS);
+        if (!access) {
+            freeOpTree(current);
+            return NULL;
+        }
+        access->text = strdup(getNodeText(node->getChild(node, i)));
+        addOperand(access, current);
+        current = access;
+    }
+
+    return current;
+}
+
+static OpNode* buildMemberAccessOp(pANTLR3_BASE_TREE node)
+{
+    if (!node) {
+        return NULL;
+    }
+
+    return buildMemberAccessChainPrefix(node, node->getChildCount(node));
+}
+
+static OpNode* buildMemberCallOp(pANTLR3_BASE_TREE node)
+{
+    if (!node || node->getChildCount(node) == 0) {
+        return NULL;
+    }
+
+    pANTLR3_BASE_TREE chain_node = node->getChild(node, 0);
+    ANTLR3_UINT32 segment_count = chain_node ? chain_node->getChildCount(chain_node) : 0;
+    if (segment_count < 2) {
+        return NULL;
+    }
+
+    OpNode* op_node = createOpNode(OP_MEMBER_CALL);
+    if (!op_node) {
+        return NULL;
+    }
+
+    op_node->text = strdup(getNodeText(chain_node->getChild(chain_node, segment_count - 1)));
+    addOperand(op_node, buildMemberAccessChainPrefix(chain_node, segment_count - 1));
+
+    if (node->getChildCount(node) > 1) {
+        pANTLR3_BASE_TREE args_node = node->getChild(node, 1);
+        const char* args_text = getNodeText(args_node);
         if (strcmp(args_text, "ARGUMENTS") == 0) {
             ANTLR3_UINT32 arg_count = args_node->getChildCount(args_node);
             for (ANTLR3_UINT32 i = 0; i < arg_count; i++) {
@@ -380,6 +457,14 @@ OpNode* buildOpTree(pANTLR3_BASE_TREE node)
 
     if (strcmp(text, "CALL") == 0) {
         return buildCallOp(node);
+    }
+
+    if (strcmp(text, "MEMBER_ACCESS") == 0) {
+        return buildMemberAccessOp(node);
+    }
+
+    if (strcmp(text, "MEMBER_CALL") == 0) {
+        return buildMemberCallOp(node);
     }
 
     if (strcmp(text, "ARRAY_ELEMENT") == 0) {

@@ -1,6 +1,0 @@
-method m()
-begin
-    x := -1;
-    y := !true;
-    z := +5;
-end;

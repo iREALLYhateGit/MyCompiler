@@ -1,5 +1,0 @@
-method m()
-begin
-    x := a && b && c;
-    y := a || b || c;
-end;

@@ -1,4 +1,0 @@
-method m()
-begin
-    call_soul();
-end;

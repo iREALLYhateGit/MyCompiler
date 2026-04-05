@@ -1,4 +1,0 @@
-method m()
-var a : array[,] of int;
-begin
-end;
